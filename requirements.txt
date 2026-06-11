@@ -1,0 +1,21 @@
+# ── Core (no runtime dependencies) ──────────────────────────────────────────
+# The reqgraph core uses only the Python standard library.
+
+# ── NLP backend (spaCy rule-based extraction) ────────────────────────────────
+spacy>=3.5
+
+# ── ML backend (BERT token tagger + sentence embeddings) ─────────────────────
+torch>=2.0
+transformers>=4.30
+numpy
+
+# ── I/O formats (CSV, Excel, ReqIF) ──────────────────────────────────────────
+pandas>=2.0
+openpyxl
+lxml
+
+# ── Graph export (networkx integration) ──────────────────────────────────────
+networkx
+
+# ── Development / testing ────────────────────────────────────────────────────
+pytest
