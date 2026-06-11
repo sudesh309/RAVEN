@@ -83,6 +83,12 @@
   </section>
 
   <div id="error"></div>
+
+  <section class="card" id="multicard" hidden>
+    <h2 id="multihead"></h2>
+    <div id="multibtns" class="controls" style="margin-top:0"></div>
+  </section>
+
   <section class="kpis" id="kpis" hidden></section>
 
   <section class="card" id="tilecard" hidden>
@@ -131,8 +137,9 @@ const EXAMPLES = [
  "While the aircraft is on the ground, the avionics suite shall provide the pilot with the ability to configure the flight plan if the parking brake is set.",
  "The flight management system shall calculate the optimal cruise altitude.",
  "The system should be fast and user-friendly and reliable.",
+ "The fuel pump shall start within 2 seconds and the controller shall log the start event.",
 ];
-let last = null;
+let last = null, reqs = [], curReq = 0;
 
 const $ = id => document.getElementById(id);
 
@@ -161,7 +168,33 @@ async function parse(){
       headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)});
   const d = await r.json();
   if(d.error){ showError(d.error); return; }
-  showError(null); last = d;
+  showError(null);
+  reqs = d.requirements || [d];
+  renderMulti();
+  showReq(0);
+}
+
+function renderMulti(){
+  const card = $("multicard");
+  if(reqs.length < 2){ card.hidden = true; return; }
+  card.hidden = false;
+  $("multihead").textContent =
+    `${reqs.length} requirements detected — pick one to inspect`;
+  $("multibtns").innerHTML = reqs.map((r, i) =>
+    `<button class="ghost reqtab" data-i="${i}" title="${esc(r.text)}">
+       ${i+1}: ${esc(r.text.length > 52 ? r.text.slice(0,52) + "…" : r.text)}
+     </button>`).join("");
+  for(const b of document.querySelectorAll(".reqtab"))
+    b.onclick = () => showReq(+b.dataset.i);
+}
+
+function showReq(i){
+  curReq = i;
+  const d = reqs[i]; last = d;
+  document.querySelectorAll(".reqtab").forEach((b, j) => {
+    b.style.borderColor = j===i ? "var(--accent)" : "";
+    b.style.color = j===i ? "var(--accent)" : "";
+  });
   renderKpis(d.kpis); renderTiles(d.tiles); renderGraph(d.tree); renderTable(d.elements);
   for(const id of ["kpis","tilecard","graphcard","tablecard"]) $(id).hidden = false;
 }

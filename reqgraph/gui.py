@@ -142,21 +142,13 @@ def _compute_kpis(g, text: str, parse_ms: float) -> dict:
     }
 
 
-def parse_request(state: GuiState, payload: dict) -> dict:
-    """Handle one /api/parse payload; returns the full UI model as a dict."""
-    text = payload.get("text", "")
-    if not isinstance(text, str) or not text.strip():
-        raise ReqGraphError("please enter a requirement text")
-    template = TEMPLATES.get(payload.get("template", ""), RUPP_TEMPLATE)
-    backend = payload.get("backend", "rules")
-    extractor = state.extractor(backend)
-
+def _requirement_payload(parser: RequirementParser, text: str) -> dict:
     t0 = time.perf_counter()
-    g = RequirementParser(template, extractor).parse(text)
+    g = parser.parse(text)
     parse_ms = (time.perf_counter() - t0) * 1000.0
     enrich(g)
-
     return {
+        "text": text,
         "kpis": _compute_kpis(g, text, parse_ms),
         "tiles": [{"role": g.nodes[nid].role.value, "text": g.nodes[nid].text}
                   for nid in g.leaf_order],
@@ -166,9 +158,35 @@ def parse_request(state: GuiState, payload: dict) -> dict:
         "mermaid": g.to_mermaid(),
         "dot": g.to_dot(),
         "graph": g.to_dict(),
+    }
+
+
+def parse_request(state: GuiState, payload: dict) -> dict:
+    """Handle one /api/parse payload; returns the full UI model as a dict.
+
+    A compound input ("...shall X and ...shall Y") is split into independent
+    requirements, each parsed separately and listed under ``requirements``.
+    The top-level fields mirror the first requirement for backward
+    compatibility (identical to the old shape for single-requirement input).
+    """
+    text = payload.get("text", "")
+    if not isinstance(text, str) or not text.strip():
+        raise ReqGraphError("please enter a requirement text")
+    template = TEMPLATES.get(payload.get("template", ""), RUPP_TEMPLATE)
+    backend = payload.get("backend", "rules")
+    parser = RequirementParser(template, state.extractor(backend))
+
+    segments = parser.split(text) if payload.get("split", True) else [text]
+    requirements = [_requirement_payload(parser, seg) for seg in segments]
+
+    out = dict(requirements[0])
+    out.update({
+        "requirements": requirements,
+        "n_requirements": len(requirements),
         "template": template.name,
         "backend": backend,
-    }
+    })
+    return out
 
 
 # ---------------------------------------------------------------------------

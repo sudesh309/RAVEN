@@ -58,24 +58,42 @@ def _read_items(path):
 
 def cmd_parse(args):
     p = _build_parser(args.template, args.backend, args.model)
-    g = p.parse(args.text, metadata={"id": args.id} if args.id else None)
-    if args.analyze:
-        enrich(g)
+    segments = [args.text] if args.no_split else p.split(args.text)
+    multi = len(segments) > 1
+    if multi:
+        print(f"detected {len(segments)} requirements in the input "
+              f"(use --no-split to parse as one)\n")
     fmt = args.format
-    if fmt == "summary":
-        print(g.summary())
-        print("round-trip exact:", g.generate() == args.text)
-    elif fmt == "json":
-        print(g.to_json())
-    elif fmt == "mermaid":
-        print(g.to_mermaid())
-    elif fmt == "dot":
-        print(g.to_dot())
-    elif fmt == "cypher":
-        print(g.to_cypher())
-    elif fmt == "elements":
-        for n in g.elements():
-            print(f"{n.role.value:<11}\t{n.text.strip()}")
+    if fmt == "json" and multi:
+        graphs = p.parse_many(args.text, metadata={"id": args.id} if args.id else None)
+        if args.analyze:
+            for g in graphs:
+                enrich(g)
+        print(json.dumps([g.to_dict() for g in graphs], indent=2))
+        return 0
+    for i, seg in enumerate(segments, 1):
+        rid = f"{args.id}-{i}" if (args.id and multi) else args.id
+        g = p.parse(seg, metadata={"id": rid} if rid else None)
+        if args.analyze:
+            enrich(g)
+        if multi:
+            print(f"--- requirement {i}/{len(segments)}: {seg}")
+        if fmt == "summary":
+            print(g.summary())
+            print("round-trip exact:", g.generate() == seg)
+        elif fmt == "json":
+            print(g.to_json())
+        elif fmt == "mermaid":
+            print(g.to_mermaid())
+        elif fmt == "dot":
+            print(g.to_dot())
+        elif fmt == "cypher":
+            print(g.to_cypher())
+        elif fmt == "elements":
+            for n in g.elements():
+                print(f"{n.role.value:<11}\t{n.text.strip()}")
+        if multi and i < len(segments):
+            print()
     return 0
 
 
@@ -197,6 +215,9 @@ def main(argv=None):
                     choices=["summary", "json", "mermaid", "dot", "cypher", "elements"])
     pp.add_argument("--analyze", action="store_true", help="add quality/type/EARS")
     pp.add_argument("--id", help="requirement id metadata")
+    pp.add_argument("--no-split", action="store_true",
+                    help="treat the input as one requirement even if it "
+                         "contains several modality clauses")
     pp.set_defaults(func=cmd_parse)
 
     pb = sub.add_parser("batch", help="parse a CSV/Excel/ReqIF set")

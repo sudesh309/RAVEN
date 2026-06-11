@@ -27,7 +27,7 @@ from .core import Edge, Node, OBLIGATION, RequirementGraph, Rel, Role
 from .templates import (EARS_TEMPLATE, RUPP_TEMPLATE, Template, TEMPLATES,
                         register_template)
 from .tiling import tile_to_graph
-from .parser import RequirementParser, build_requirement
+from .parser import RequirementParser, build_requirement, split_requirements
 from .extractors import (Extractor, RuleExtractor, SpacyExtractor,
                          BertTaggerExtractor, auto_select, get_extractor)
 
@@ -37,7 +37,7 @@ _logging.getLogger(__name__).addHandler(_logging.NullHandler())
 __all__ = [
     "Role", "Rel", "Node", "Edge", "OBLIGATION", "RequirementGraph",
     "Template", "RUPP_TEMPLATE", "EARS_TEMPLATE", "TEMPLATES", "register_template",
-    "tile_to_graph", "RequirementParser", "build_requirement",
+    "tile_to_graph", "RequirementParser", "build_requirement", "split_requirements",
     "Extractor", "RuleExtractor", "SpacyExtractor", "BertTaggerExtractor",
     "auto_select", "get_extractor",
     "ReqGraphError", "GraphIntegrityError", "ExtractionError",
