@@ -1,0 +1,7 @@
+id,text
+REQ-1,"When the cabin altitude exceeds 14,000 feet, the oxygen system shall deploy the oxygen masks within 4 seconds."
+REQ-2,The autopilot shall maintain the selected heading.
+REQ-3,The auto-flight system shall hold the chosen heading.
+REQ-4,The system shall not deploy the spoilers during takeoff.
+REQ-5,The system shall deploy the spoilers during takeoff.
+REQ-6,The system should be fast and user-friendly.

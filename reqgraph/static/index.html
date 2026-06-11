@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>reqgraph studio</title>
+<style>
+  :root{
+    --bg:#f7f6f3; --card:#ffffff; --border:#e4e2da; --text:#2c2c2a;
+    --muted:#6f6e68; --accent:#534AB7; --accent-soft:#EEEDFE;
+    --ok:#0F6E56; --ok-soft:#E1F5EE; --bad:#A32D2D; --bad-soft:#FCEBEB;
+    font-size:15px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font-family:"Segoe UI",system-ui,-apple-system,sans-serif;line-height:1.5}
+  header{display:flex;align-items:baseline;gap:12px;padding:18px 28px 6px}
+  header h1{font-size:20px;font-weight:600;margin:0}
+  header .sub{color:var(--muted);font-size:13px}
+  header .ver{margin-left:auto;color:var(--muted);font-size:12px}
+  main{max-width:1180px;margin:0 auto;padding:10px 28px 48px;display:flex;
+       flex-direction:column;gap:16px}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:12px;
+        padding:16px 18px}
+  .card h2{font-size:13px;font-weight:600;letter-spacing:.04em;color:var(--muted);
+           text-transform:uppercase;margin:0 0 10px}
+  textarea{width:100%;min-height:84px;resize:vertical;border:1px solid var(--border);
+           border-radius:8px;padding:10px 12px;font:inherit;color:var(--text)}
+  textarea:focus{outline:2px solid var(--accent-soft);border-color:var(--accent)}
+  .controls{display:flex;flex-wrap:wrap;gap:10px;margin-top:10px;align-items:center}
+  select,button{font:inherit;border-radius:8px;border:1px solid var(--border);
+                background:#fff;padding:7px 12px;color:var(--text)}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff;
+                 font-weight:600;cursor:pointer;padding:7px 22px}
+  button.primary:hover{filter:brightness(1.08)}
+  button.ghost{cursor:pointer;color:var(--muted);font-size:13px}
+  button.ghost:hover{border-color:var(--accent);color:var(--accent)}
+  .hint{color:var(--muted);font-size:12.5px;margin-left:auto}
+  #error{display:none;background:var(--bad-soft);color:var(--bad);
+         border:1px solid #f0c0c0;border-radius:8px;padding:9px 13px;font-size:14px}
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:10px}
+  .kpi{background:var(--card);border:1px solid var(--border);border-radius:12px;
+       padding:11px 14px}
+  .kpi .v{font-size:21px;font-weight:650;line-height:1.2}
+  .kpi .l{font-size:11.5px;color:var(--muted);letter-spacing:.03em;
+          text-transform:uppercase;margin-top:2px}
+  .kpi .d{font-size:11.5px;color:var(--muted);margin-top:2px;min-height:0}
+  .kpi.good .v{color:var(--ok)} .kpi.bad .v{color:var(--bad)}
+  #tiles{font-size:16.5px;line-height:2.1;word-wrap:break-word}
+  #tiles span.el{padding:3px 4px;border-radius:5px;border-bottom:2px solid}
+  #legend{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+  #legend .chip{font-size:11px;letter-spacing:.04em;padding:2px 9px;border-radius:99px;
+                border:1px solid}
+  #graphwrap{overflow-x:auto}
+  svg text{font-family:inherit}
+  table{width:100%;border-collapse:collapse;font-size:14px}
+  th{text-align:left;color:var(--muted);font-size:11.5px;text-transform:uppercase;
+     letter-spacing:.04em;padding:6px 10px;border-bottom:1px solid var(--border)}
+  td{padding:7px 10px;border-bottom:1px solid var(--border)}
+  td.role span{font-size:11px;letter-spacing:.04em;padding:2px 9px;border-radius:99px;
+               border:1px solid}
+  .row-head{display:flex;align-items:center;gap:8px}
+  .row-head .spacer{flex:1}
+</style>
+</head>
+<body>
+<header>
+  <h1>reqgraph studio</h1>
+  <span class="sub">requirement &rarr; semantic graph, losslessly</span>
+  <span class="ver" id="ver"></span>
+</header>
+<main>
+  <section class="card">
+    <h2>Requirement</h2>
+    <textarea id="text" spellcheck="false"></textarea>
+    <div class="controls">
+      <select id="example" title="examples"></select>
+      <select id="template" title="template"></select>
+      <select id="backend" title="extraction backend"></select>
+      <button class="primary" id="parse">Parse &rarr; graph</button>
+      <span class="hint">Ctrl+Enter parses</span>
+    </div>
+  </section>
+
+  <div id="error"></div>
+  <section class="kpis" id="kpis" hidden></section>
+
+  <section class="card" id="tilecard" hidden>
+    <h2>Tiled elements &mdash; every character belongs to one node</h2>
+    <div id="tiles"></div>
+    <div id="legend"></div>
+  </section>
+
+  <section class="card" id="graphcard" hidden>
+    <div class="row-head">
+      <h2 style="margin:0">Semantic graph</h2>
+      <span class="spacer"></span>
+      <button class="ghost" onclick="dl('svg')">SVG</button>
+      <button class="ghost" onclick="dl('json')">JSON</button>
+      <button class="ghost" onclick="dl('mermaid')">Mermaid</button>
+      <button class="ghost" onclick="dl('dot')">DOT</button>
+    </div>
+    <div id="graphwrap"><svg id="graph"></svg></div>
+  </section>
+
+  <section class="card" id="tablecard" hidden>
+    <h2>Element table</h2>
+    <table><thead><tr><th style="width:140px">Role</th><th>Text</th>
+      <th style="width:260px">Attributes</th></tr></thead>
+      <tbody id="tbody"></tbody></table>
+  </section>
+</main>
+
+<script>
+const ROLE_C = {
+  CONDITION: {bg:"#FAEEDA", bd:"#BA7517", tx:"#633806"},
+  SUBJECT:   {bg:"#E6F1FB", bd:"#185FA5", tx:"#0C447C"},
+  MODALITY:  {bg:"#FBEAF0", bd:"#993556", tx:"#72243E"},
+  ACTOR:     {bg:"#FAECE7", bd:"#993C1D", tx:"#712B13"},
+  PROCESS:   {bg:"#EAF3DE", bd:"#3B6D11", tx:"#27500A"},
+  OBJECT:    {bg:"#E1F5EE", bd:"#0F6E56", tx:"#085041"},
+  DETAILS:   {bg:"#F1EFE8", bd:"#5F5E5A", tx:"#444441"},
+  CONSTRAINT:{bg:"#EEEDFE", bd:"#534AB7", tx:"#3C3489"},
+  ROOT:      {bg:"#2C2C2A", bd:"#2C2C2A", tx:"#FFFFFF"},
+  ACTION:    {bg:"#FFFFFF", bd:"#B4B2A9", tx:"#444441"},
+  OPERATOR:  {bg:"#444441", bd:"#444441", tx:"#FFFFFF"},
+};
+const EXAMPLES = [
+ "When the cabin altitude exceeds 14,000 feet, the oxygen system shall deploy the passenger oxygen masks within 4 seconds.",
+ "As soon as an engine fire is detected, the engine control unit shall shut off the affected engine and activate the fire suppression system within 500 milliseconds.",
+ "While the aircraft is on the ground, the avionics suite shall provide the pilot with the ability to configure the flight plan if the parking brake is set.",
+ "The flight management system shall calculate the optimal cruise altitude.",
+ "The system should be fast and user-friendly and reliable.",
+];
+let last = null;
+
+const $ = id => document.getElementById(id);
+
+async function boot(){
+  const info = await (await fetch("/api/info")).json();
+  $("ver").textContent = "v" + info.version;
+  $("template").innerHTML = info.templates.map(t =>
+    `<option ${t==="IREB-Rupp"?"selected":""}>${t}</option>`).join("");
+  $("backend").innerHTML = Object.entries(info.backends).map(([n, ok]) =>
+    `<option value="${n}" ${ok?"":"disabled"}>${n}${ok?"":" (unavailable)"}</option>`).join("");
+  $("example").innerHTML = `<option value="">examples…</option>` + EXAMPLES.map((e,i) =>
+    `<option value="${i}">${e.slice(0,58)}…</option>`).join("");
+  $("example").onchange = () => { if($("example").value!==""){
+      $("text").value = EXAMPLES[+$("example").value]; parse(); } };
+  $("parse").onclick = parse;
+  $("text").addEventListener("keydown", e => {
+      if(e.key==="Enter" && (e.ctrlKey||e.metaKey)) parse(); });
+  $("text").value = EXAMPLES[0];
+  parse();
+}
+
+async function parse(){
+  const body = {text: $("text").value, template: $("template").value,
+                backend: $("backend").value};
+  const r = await fetch("/api/parse", {method:"POST",
+      headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)});
+  const d = await r.json();
+  if(d.error){ showError(d.error); return; }
+  showError(null); last = d;
+  renderKpis(d.kpis); renderTiles(d.tiles); renderGraph(d.tree); renderTable(d.elements);
+  for(const id of ["kpis","tilecard","graphcard","tablecard"]) $(id).hidden = false;
+}
+
+function showError(msg){
+  $("error").style.display = msg ? "block" : "none";
+  $("error").textContent = msg || "";
+}
+
+function kpiCard(v, label, detail, cls){
+  return `<div class="kpi ${cls||""}"><div class="v">${v}</div>
+          <div class="l">${label}</div><div class="d">${detail||""}</div></div>`;
+}
+function renderKpis(k){
+  const atomic = k.n_actions <= 1 ? "atomic" :
+        `${k.n_actions} actions (${k.operator||"?"})`;
+  $("kpis").innerHTML =
+    kpiCard(k.roundtrip_ok ? "&#10003; exact" : "&#10007; differs", "round-trip",
+            "regenerated = input", k.roundtrip_ok ? "good" : "bad") +
+    kpiCard(k.quality_score, "quality score",
+            k.smells.length ? k.smells.join(", ") : "no smells",
+            k.quality_score >= 80 ? "good" : (k.quality_score >= 50 ? "" : "bad")) +
+    kpiCard(k.n_elements, "elements", `${k.coverage_pct}% text coverage`) +
+    kpiCard(k.type, "type", "IREB classification") +
+    kpiCard(k.ears_pattern.split(" ")[0], "EARS", k.ears_pattern) +
+    kpiCard(k.obligation.split(" ")[0], "obligation", k.obligation) +
+    kpiCard(k.parse_ms + " ms", "parse time", `${k.n_words} words, ${atomic}`);
+}
+
+function renderTiles(tiles){
+  $("tiles").innerHTML = tiles.map(t => {
+    if(t.role === "GLUE") return esc(t.text);
+    const c = ROLE_C[t.role] || ROLE_C.DETAILS;
+    return `<span class="el" title="${t.role}" style="background:${c.bg};
+            border-color:${c.bd};color:${c.tx}">${esc(t.text)}</span>`;
+  }).join("");
+  const used = [...new Set(tiles.filter(t => t.role!=="GLUE").map(t => t.role))];
+  $("legend").innerHTML = used.map(r => {
+    const c = ROLE_C[r];
+    return `<span class="chip" style="background:${c.bg};border-color:${c.bd};
+            color:${c.tx}">${r}</span>`;}).join("");
+}
+
+function esc(s){ return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+
+/* ---- graph: tidy tree layout in plain SVG ---- */
+const NW = 158, NH = 60, HGAP = 18, VGAP = 56;
+function renderGraph(tree){
+  if(!tree) return;
+  let slot = 0;
+  function place(n, depth){
+    n._d = depth;
+    if(!n.children.length){ n._x = slot++; }
+    else{
+      for(const c of n.children) place(c.node, depth+1);
+      const xs = n.children.map(c => c.node._x);
+      n._x = (Math.min(...xs)+Math.max(...xs))/2;
+    }
+  }
+  place(tree, 0);
+  let maxd = 0; (function md(n){ maxd = Math.max(maxd, n._d);
+      n.children.forEach(c => md(c.node)); })(tree);
+  const W = Math.max(slot*(NW+HGAP)+40, 720), H = (maxd+1)*(NH+VGAP)+20;
+  const px = n => 20 + n._x*(NW+HGAP) + NW/2;
+  const py = n => 10 + n._d*(NH+VGAP);
+  let edges = "", nodes = "";
+  (function draw(n){
+    for(const c of n.children){
+      const m = c.node;
+      const x1 = px(n), y1 = py(n)+NH, x2 = px(m), y2 = py(m);
+      edges += `<path d="M${x1},${y1} C${x1},${y1+VGAP/2} ${x2},${y2-VGAP/2} ${x2},${y2}"
+        fill="none" stroke="#c9c7bd" stroke-width="1.4"/>
+        <text x="${(x1+x2)/2}" y="${(y1+y2)/2+4}" text-anchor="middle"
+        font-size="9.5" fill="#9a988f">${c.rel}</text>`;
+      draw(m);
+    }
+    const c = ROLE_C[n.role] || ROLE_C.DETAILS;
+    const label = n.role === "ROOT" ? "REQUIREMENT" :
+                  (n.role === "OPERATOR" ? (n.attrs.operator||"OP") : n.role);
+    const body = n.text ? wrap(n.text, 24, 2) : [];
+    nodes += `<g><rect x="${px(n)-NW/2}" y="${py(n)}" width="${NW}" height="${NH}"
+      rx="9" fill="${c.bg}" stroke="${c.bd}" stroke-width="1.4"/>
+      <text x="${px(n)}" y="${py(n)+17}" text-anchor="middle" font-size="10"
+      font-weight="600" letter-spacing=".05em" fill="${c.tx}">${label}</text>`;
+    body.forEach((ln,i) => { nodes += `<text x="${px(n)}" y="${py(n)+33+i*14}"
+      text-anchor="middle" font-size="11.5" fill="${c.tx}">${esc(ln)}</text>`; });
+    nodes += `</g>`;
+  })(tree);
+  const svg = $("graph");
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.setAttribute("width", W); svg.setAttribute("height", H);
+  svg.innerHTML = edges + nodes;
+}
+function wrap(s, w, maxLines){
+  const words = s.split(/\s+/), lines = [];
+  let cur = "";
+  for(const word of words){
+    if((cur+" "+word).trim().length > w){ lines.push(cur.trim()); cur = word; }
+    else cur += " " + word;
+  }
+  if(cur.trim()) lines.push(cur.trim());
+  if(lines.length > maxLines){
+    lines.length = maxLines;
+    lines[maxLines-1] = lines[maxLines-1].slice(0, w-1) + "…";
+  }
+  return lines;
+}
+
+function renderTable(els){
+  $("tbody").innerHTML = els.map(e => {
+    const c = ROLE_C[e.role] || ROLE_C.DETAILS;
+    const attrs = Object.entries(e.attrs).map(([k,v]) => `${k}: ${v}`).join(" · ");
+    return `<tr><td class="role"><span style="background:${c.bg};
+      border-color:${c.bd};color:${c.tx}">${e.role}</span></td>
+      <td>${esc(e.text)}</td><td style="color:var(--muted)">${esc(attrs)}</td></tr>`;
+  }).join("");
+}
+
+function dl(kind){
+  if(!last) return;
+  const map = {
+    svg:    [new XMLSerializer().serializeToString($("graph")), "requirement_graph.svg", "image/svg+xml"],
+    json:   [JSON.stringify(last.graph, null, 2), "requirement_graph.json", "application/json"],
+    mermaid:[last.mermaid, "requirement_graph.mmd", "text/plain"],
+    dot:    [last.dot, "requirement_graph.dot", "text/plain"],
+  };
+  const [data, name, mime] = map[kind];
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([data], {type:mime}));
+  a.download = name; a.click(); URL.revokeObjectURL(a.href);
+}
+
+boot();
+</script>
+</body>
+</html>

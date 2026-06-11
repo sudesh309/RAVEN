@@ -1,0 +1,2 @@
+[console_scripts]
+reqgraph = reqgraph.__main__:main
