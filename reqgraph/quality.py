@@ -50,6 +50,10 @@ _PASSIVE_RE = re.compile(r"\b(is|are|was|were|be|been|being)\s+\w+ed\b")
 _MODALITY_RE = re.compile(r"\b(shall|should|must|will|may|can)\b")
 _VAGUE_RE = re.compile(r"\b(some|several|many|few|various|a number of|as much as possible)\b")
 _CONJ_RE = re.compile(r"\b(and|or)\b")
+# matches multi-word negating modalities first so "shall not" counts as one
+_MODALITY_COUNT_RE = re.compile(
+    r"\b(shall\s+not|should\s+not|must\s+not|will\s+not|may\s+not|cannot"
+    r"|shall|should|must|will|may|can)\b")
 
 
 def check_quality(text: str) -> dict:
@@ -61,6 +65,7 @@ def check_quality(text: str) -> dict:
         "missing_modality": not _MODALITY_RE.search(low),
         "vague_quantifier": bool(_VAGUE_RE.search(low)),
         "non_atomic": len(_CONJ_RE.findall(low)) > 1,
+        "compound_requirement": len(_MODALITY_COUNT_RE.findall(low)) > 1,
     }
 
 

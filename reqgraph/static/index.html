@@ -61,6 +61,18 @@
                border:1px solid}
   .row-head{display:flex;align-items:center;gap:8px}
   .row-head .spacer{flex:1}
+  /* compound-requirement warning banner */
+  #compound-banner{display:none;border-radius:12px;padding:14px 18px;
+    background:#FFF8E6;border:1px solid #E5A020;color:#7A4B00}
+  #compound-banner .cb-head{font-weight:600;font-size:14px;margin-bottom:6px}
+  #compound-banner .cb-tabs{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+  .reqtab{cursor:pointer;font-size:13px;padding:6px 14px;border-radius:8px;
+    border:1.5px solid #E5A020;background:#fff;color:#7A4B00;text-align:left}
+  .reqtab:hover{background:#FFF0CC}
+  .reqtab.active{background:#E5A020;color:#fff;border-color:#E5A020;font-weight:600}
+  /* context label shown above analysis sections when viewing one of N reqs */
+  .req-context{font-size:12px;color:var(--muted);margin-bottom:8px;
+    padding:5px 10px;background:var(--bg);border-radius:6px;display:none}
 </style>
 </head>
 <body>
@@ -84,15 +96,17 @@
 
   <div id="error"></div>
 
-  <section class="card" id="multicard" hidden>
-    <h2 id="multihead"></h2>
-    <div id="multibtns" class="controls" style="margin-top:0"></div>
-  </section>
+  <div id="compound-banner">
+    <div class="cb-head" id="compound-head"></div>
+    <div id="compound-msg"></div>
+    <div class="cb-tabs" id="compound-tabs"></div>
+  </div>
 
   <section class="kpis" id="kpis" hidden></section>
 
   <section class="card" id="tilecard" hidden>
     <h2>Tiled elements &mdash; every character belongs to one node</h2>
+    <div class="req-context" id="tile-ctx"></div>
     <div id="tiles"></div>
     <div id="legend"></div>
   </section>
@@ -106,11 +120,13 @@
       <button class="ghost" onclick="dl('mermaid')">Mermaid</button>
       <button class="ghost" onclick="dl('dot')">DOT</button>
     </div>
+    <div class="req-context" id="graph-ctx"></div>
     <div id="graphwrap"><svg id="graph"></svg></div>
   </section>
 
   <section class="card" id="tablecard" hidden>
     <h2>Element table</h2>
+    <div class="req-context" id="table-ctx"></div>
     <table><thead><tr><th style="width:140px">Role</th><th>Text</th>
       <th style="width:260px">Attributes</th></tr></thead>
       <tbody id="tbody"></tbody></table>
@@ -170,31 +186,44 @@ async function parse(){
   if(d.error){ showError(d.error); return; }
   showError(null);
   reqs = d.requirements || [d];
-  renderMulti();
+  renderBanner();
   showReq(0);
 }
 
-function renderMulti(){
-  const card = $("multicard");
-  if(reqs.length < 2){ card.hidden = true; return; }
-  card.hidden = false;
-  $("multihead").textContent =
-    `${reqs.length} requirements detected — pick one to inspect`;
-  $("multibtns").innerHTML = reqs.map((r, i) =>
-    `<button class="ghost reqtab" data-i="${i}" title="${esc(r.text)}">
-       ${i+1}: ${esc(r.text.length > 52 ? r.text.slice(0,52) + "…" : r.text)}
+function renderBanner(){
+  const banner = $("compound-banner");
+  if(reqs.length < 2){ banner.style.display = "none"; return; }
+  banner.style.display = "block";
+  $("compound-head").textContent =
+    `⚠️ Compound input — ${reqs.length} requirements detected`;
+  $("compound-msg").textContent =
+    "Your text contains multiple modality clauses. Each has been split into an " +
+    "independent requirement and parsed separately. Select one to inspect its graph.";
+  $("compound-tabs").innerHTML = reqs.map((r, i) =>
+    `<button class="reqtab" data-i="${i}">
+       <strong>${i+1} of ${reqs.length}</strong>&nbsp;&nbsp;${esc(r.text.length > 60 ? r.text.slice(0,60) + "…" : r.text)}
      </button>`).join("");
   for(const b of document.querySelectorAll(".reqtab"))
     b.onclick = () => showReq(+b.dataset.i);
+}
+
+function setCtx(label){
+  for(const id of ["tile-ctx","graph-ctx","table-ctx"]){
+    const el = $(id);
+    if(label){ el.textContent = label; el.style.display = "block"; }
+    else { el.style.display = "none"; }
+  }
 }
 
 function showReq(i){
   curReq = i;
   const d = reqs[i]; last = d;
   document.querySelectorAll(".reqtab").forEach((b, j) => {
-    b.style.borderColor = j===i ? "var(--accent)" : "";
-    b.style.color = j===i ? "var(--accent)" : "";
+    b.classList.toggle("active", j===i);
   });
+  const ctx = reqs.length > 1
+    ? `Requirement ${i+1} of ${reqs.length}: "${d.text}"` : null;
+  setCtx(ctx);
   renderKpis(d.kpis); renderTiles(d.tiles); renderGraph(d.tree); renderTable(d.elements);
   for(const id of ["kpis","tilecard","graphcard","tablecard"]) $(id).hidden = false;
 }

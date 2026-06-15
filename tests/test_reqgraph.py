@@ -208,6 +208,21 @@ def test_quality_and_classification():
                                   "safety", "usability"}
 
 
+def test_compound_requirement_smell():
+    from reqgraph.quality import check_quality
+    # two independent modality clauses → compound smell fires
+    q = check_quality(
+        "The system shall open the valve and the controller shall log the event.")
+    assert q["compound_requirement"] is True
+    # single modality with compound action → NOT compound
+    q2 = check_quality(
+        "As soon as a fire is detected, the system shall shut off the engine "
+        "and activate the suppression system within 500 milliseconds.")
+    assert q2["compound_requirement"] is False
+    # "shall not" counts as one modality
+    assert check_quality("The system shall not transmit.")["compound_requirement"] is False
+
+
 # --- batch I/O -------------------------------------------------------------
 
 def test_reqif_roundtrip():

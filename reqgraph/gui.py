@@ -118,7 +118,8 @@ def _compute_kpis(g, text: str, parse_ms: float) -> dict:
         ("missing_modality", "missing modality"),
         ("passive_voice", "passive voice"),
         ("vague_quantifier", "vague quantifier"),
-        ("non_atomic", "non-atomic"))
+        ("non_atomic", "non-atomic"),
+        ("compound_requirement", "compound requirement"))
         if q.get(key)]
     weak = list(q.get("weak_words", []))
     score = max(0, 100 - 20 * len(smells) - 10 * len(weak))
