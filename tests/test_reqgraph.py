@@ -81,6 +81,67 @@ def test_modality_obligation():
     assert "mandatory" in modal.attrs["obligation"]
 
 
+# --- multi-requirement splitting --------------------------------------------
+
+def test_split_two_shall_conjunction():
+    from reqgraph import split_requirements
+    text = "The system shall open the valve and the controller shall log the event."
+    segs = split_requirements(text)
+    assert segs == ["The system shall open the valve",
+                    "the controller shall log the event."]
+
+
+def test_split_two_sentences():
+    from reqgraph import split_requirements
+    text = "The system shall open the valve. The system shall log the event."
+    assert split_requirements(text) == [
+        "The system shall open the valve.", "The system shall log the event."]
+
+
+def test_split_comma_splice_and_semicolon():
+    from reqgraph import split_requirements
+    assert len(split_requirements(
+        "The system shall open the valve, the operator shall confirm the action.")) == 2
+    assert len(split_requirements(
+        "The system shall open the valve; the system shall log the event.")) == 2
+
+
+def test_split_keeps_compound_action_atomic():
+    from reqgraph import split_requirements
+    # one modality governing two actions stays ONE requirement
+    assert split_requirements(REQS[3]) == [REQS[3]]
+    # "shall not" is a single modality token, not two
+    assert split_requirements(REQS[4]) == [REQS[4]]
+    # embedded second modality without its own clause does not split
+    text = "The system shall ensure the operator can access the logs."
+    assert split_requirements(text) == [text]
+
+
+def test_split_ignores_decimals_and_object_lists():
+    from reqgraph import split_requirements
+    text = ("The pump shall start within 4.5 seconds and "
+            "the controller shall record the time.")
+    assert split_requirements(text) == [
+        "The pump shall start within 4.5 seconds",
+        "the controller shall record the time."]
+    text = "The system shall monitor the pump and the valve and the controller shall log events."
+    assert split_requirements(text) == [
+        "The system shall monitor the pump and the valve",
+        "the controller shall log events."]
+
+
+def test_parse_many_roundtrips_and_ids():
+    p = RequirementParser(RUPP_TEMPLATE)
+    text = "The system shall open the valve and the controller shall log the event."
+    graphs = p.parse_many(text, metadata={"id": "REQ-9"})
+    assert len(graphs) == 2
+    for g, seg in zip(graphs, p.split(text)):
+        assert g.generate() == seg
+    assert [g.metadata["id"] for g in graphs] == ["REQ-9-1", "REQ-9-2"]
+    subjects = [g.by_role(Role.SUBJECT)[0].text.strip() for g in graphs]
+    assert subjects == ["The system", "the controller"]
+
+
 # --- templates -------------------------------------------------------------
 
 def test_ears_template():
