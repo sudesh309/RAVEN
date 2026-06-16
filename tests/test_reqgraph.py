@@ -294,6 +294,98 @@ def test_csv_roundtrip():
     assert [t for _, t in back] == [t for _, t in items]
 
 
+# --- requirement set: cross-requirement SUBJECT/OBJECT connections ---------
+
+SET_REQS = [
+    ("R1", "The flight management system shall calculate the optimal cruise altitude."),
+    ("R2", "The flight management system shall log every altitude change to the "
+           "maintenance recorder."),
+    ("R3", "The pilot shall be able to override the calculated cruise altitude."),
+    ("R4", "The oxygen system shall deploy the passenger oxygen masks when the "
+           "cabin altitude exceeds 14,000 feet."),
+]
+
+
+def test_requirement_set_finds_subject_and_object_connections():
+    from reqgraph.corpus import build_requirement_set_graph
+    rsg = build_requirement_set_graph(SET_REQS)
+    assert rsg.req_ids == ["R1", "R2", "R3", "R4"]
+    pairs = {(c.a.req_id, c.b.req_id, c.role.value) for c in rsg.connections}
+    # R1 and R2 share the exact same SUBJECT
+    assert ("R1", "R2", "SUBJECT") in pairs
+    # R1 and R3 share a near-identical OBJECT (optimal vs calculated cruise altitude)
+    assert ("R1", "R3", "OBJECT") in pairs
+    # unrelated subjects ("flight management system" vs "oxygen system") must
+    # not connect just because both spans contain a determiner + "system"
+    assert not any(c.role is Role.SUBJECT and {c.a.req_id, c.b.req_id} == {"R1", "R4"}
+                   for c in rsg.connections)
+
+
+def test_requirement_set_respects_threshold():
+    from reqgraph.corpus import build_requirement_set_graph
+    rsg = build_requirement_set_graph(SET_REQS, threshold=0.999)
+    # only the byte-identical SUBJECT survives an (almost) exact-match threshold
+    assert all(c.score >= 0.999 for c in rsg.connections)
+    assert ("R1", "R3") not in {(c.a.req_id, c.b.req_id) for c in rsg.connections}
+
+
+def test_requirement_set_splits_compound_items():
+    from reqgraph.corpus import build_requirement_set_graph
+    items = ["The system shall open the valve and the controller shall log the event."]
+    rsg = build_requirement_set_graph(items)
+    assert rsg.req_ids == ["REQ-1-1", "REQ-1-2"]
+    assert rsg.graphs["REQ-1-1"].generate() == "The system shall open the valve"
+    assert rsg.graphs["REQ-1-2"].generate() == "the controller shall log the event."
+
+
+def test_requirement_set_exporters():
+    import xml.dom.minidom as minidom
+    from reqgraph.corpus import build_requirement_set_graph
+    rsg = build_requirement_set_graph(SET_REQS)
+
+    mer = rsg.to_mermaid()
+    assert mer.startswith("flowchart")
+    assert "R1" in mer and "-->" in mer
+
+    dot = rsg.to_dot()
+    assert dot.startswith("digraph RequirementSet")
+
+    gml = rsg.to_graphml()
+    minidom.parseString(gml)        # must be well-formed XML
+    assert "<graphml" in gml
+
+    ttl = rsg.to_turtle()
+    assert "@prefix rg:" in ttl
+    assert "a rg:Requirement" in ttl
+
+    cyp = rsg.to_cypher()
+    assert "CREATE (:Requirement" in cyp
+    assert "SIMILAR_SUBJECT" in cyp or "SIMILAR_OBJECT" in cyp
+
+    d = rsg.to_dict()
+    assert len(d["requirements"]) == 4
+    assert all({"req_a", "req_b", "role", "score"} <= c.keys() for c in d["connections"])
+
+
+def test_cli_connections_text_and_json(tmp_path, capsys):
+    pytest.importorskip("pandas")
+    from reqgraph.__main__ import main
+    csv_in = tmp_path / "set.csv"
+    csv_in.write_text(
+        "id,text\n"
+        "R1,The flight management system shall calculate the optimal cruise altitude.\n"
+        "R2,The flight management system shall log every altitude change to the "
+        "maintenance recorder.\n",
+        encoding="utf-8")
+    assert main(["connections", str(csv_in)]) == 0
+    out = capsys.readouterr().out
+    assert "SUBJECT" in out
+
+    assert main(["connections", str(csv_in), "--format", "json"]) == 0
+    payload = capsys.readouterr().out
+    assert '"connections"' in payload and '"requirements"' in payload
+
+
 # --- BERT tagger (optional, slow) ------------------------------------------
 
 def test_bert_tagger_trains_and_roundtrips():
@@ -449,6 +541,26 @@ def test_gui_parse_request_rejects_empty():
         parse_request(GuiState(), {"text": "   "})
 
 
+def test_gui_connections_request_payload():
+    from reqgraph.gui import GuiState, connections_request
+    texts = [t for _, t in SET_REQS]
+    d = connections_request(GuiState(), {"texts": texts})
+    assert d["n_requirements"] == 4
+    assert d["n_connections"] >= 2
+    assert {c["role"] for c in d["connections"]} <= {"SUBJECT", "OBJECT"}
+    assert "flowchart" in d["mermaid"]
+    assert "<graphml" in d["graphml"]
+    assert "@prefix rg:" in d["turtle"]
+    assert "CREATE" in d["cypher"]
+
+
+def test_gui_connections_request_rejects_empty():
+    from reqgraph import ReqGraphError
+    from reqgraph.gui import GuiState, connections_request
+    with pytest.raises(ReqGraphError):
+        connections_request(GuiState(), {"texts": ["   ", ""]})
+
+
 def test_gui_server_smoke():
     import json as _json
     import threading
@@ -473,6 +585,12 @@ def test_gui_server_smoke():
             headers={"Content-Type": "application/json"})
         out = _json.load(urllib.request.urlopen(req, timeout=10))
         assert out["kpis"]["roundtrip_ok"] is True
+        creq = urllib.request.Request(
+            f"{base}/api/connections",
+            data=_json.dumps({"texts": [t for _, t in SET_REQS]}).encode(),
+            headers={"Content-Type": "application/json"})
+        cout = _json.load(urllib.request.urlopen(creq, timeout=10))
+        assert cout["n_requirements"] == 4
     finally:
         server.shutdown()
         server.server_close()

@@ -168,6 +168,46 @@ def cmd_gui(args):
                   bert_model_dir=args.model)
 
 
+def cmd_connections(args):
+    from .corpus import build_requirement_set_graph
+    items = _read_items(args.infile)
+    ex = None
+    if args.backend == "spacy":
+        ex = SpacyExtractor()
+    elif args.backend == "bert":
+        ex = BertTaggerExtractor(model_dir=args.model)
+    template = TEMPLATES.get(args.template, RUPP_TEMPLATE)
+    roles = tuple(Role(r.strip().upper()) for r in args.roles.split(","))
+
+    rsg = build_requirement_set_graph(
+        items, template=template, extractor=ex, roles=roles,
+        threshold=args.threshold, similarity=args.similarity,
+        embedding_model=args.embedding_model)
+
+    fmt = args.format
+    if fmt == "json":
+        print(json.dumps(rsg.to_dict(), indent=2))
+    elif fmt == "mermaid":
+        print(rsg.to_mermaid())
+    elif fmt == "dot":
+        print(rsg.to_dot())
+    elif fmt == "cypher":
+        print(rsg.to_cypher())
+    elif fmt == "graphml":
+        print(rsg.to_graphml())
+    elif fmt == "turtle":
+        print(rsg.to_turtle())
+    else:
+        print(f"loaded {len(rsg.req_ids)} requirements from {args.infile}\n")
+        if not rsg.connections:
+            print(f"no cross-requirement connections found "
+                  f"(similarity={args.similarity}, threshold={args.threshold})")
+        for c in rsg._dedup_pairs():
+            print(f"[{c.a.req_id}] {c.role.value} {c.a.text!r}  "
+                  f"~{c.score:.2f}~  [{c.b.req_id}] {c.role.value} {c.b.text!r}")
+    return 0
+
+
 def cmd_analyze(args):
     items = _read_items(args.infile)
     texts = [t for _id, t in items]
@@ -257,6 +297,22 @@ def main(argv=None):
     pa.add_argument("--dup-threshold", type=float, default=0.95)
     pa.add_argument("--conflict-threshold", type=float, default=0.9)
     pa.set_defaults(func=cmd_analyze)
+
+    pc = sub.add_parser("connections",
+                        help="find similar SUBJECT/OBJECT elements across a "
+                             "requirement set and visualize the connections")
+    pc.add_argument("infile")
+    pc.add_argument("--template", default="IREB-Rupp")
+    pc.add_argument("--backend", default="rules", choices=["rules", "spacy", "bert"])
+    pc.add_argument("--model")
+    pc.add_argument("--roles", default="SUBJECT,OBJECT",
+                    help="comma-separated roles to cross-reference (default SUBJECT,OBJECT)")
+    pc.add_argument("--similarity", default="lexical", choices=["lexical", "embedding"])
+    pc.add_argument("--threshold", type=float, default=0.6)
+    pc.add_argument("--embedding-model", default="prajjwal1/bert-tiny")
+    pc.add_argument("--format", default="text",
+                    choices=["text", "json", "mermaid", "dot", "cypher", "graphml", "turtle"])
+    pc.set_defaults(func=cmd_connections)
 
     args = ap.parse_args(argv)
     level = {0: logging.WARNING, 1: logging.INFO}.get(args.verbose, logging.DEBUG)

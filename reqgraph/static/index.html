@@ -92,6 +92,12 @@
   .exports .grp{font-size:10.5px;letter-spacing:.04em;text-transform:uppercase;
     color:var(--muted);margin-right:2px}
   .exports .sep{width:1px;height:18px;background:var(--border);margin:0 4px}
+  /* requirement-set connections */
+  #set-error{display:none;background:var(--bad-soft);color:var(--bad);
+    border:1px solid #f0c0c0;border-radius:8px;padding:9px 13px;font-size:14px}
+  #connwrap{overflow-x:auto}
+  .num{font:inherit;border-radius:8px;border:1px solid var(--border);
+    padding:7px 8px;width:72px}
 </style>
 </head>
 <body>
@@ -166,6 +172,52 @@
     <table><thead><tr><th style="width:140px">Role</th><th>Text</th>
       <th style="width:260px">Attributes</th></tr></thead>
       <tbody id="tbody"></tbody></table>
+  </section>
+
+  <section class="card">
+    <h2>Requirement set &mdash; find connections</h2>
+    <div class="hint" style="margin:0 0 8px;display:block">
+      One requirement per line. Each line gets its own graph; SUBJECT/OBJECT
+      elements that recur across different lines are connected below.
+    </div>
+    <textarea id="set-text" spellcheck="false" style="min-height:130px"></textarea>
+    <div class="controls">
+      <div class="ctl"><label for="set-example">Example</label>
+        <select id="set-example" title="load an example set"></select></div>
+      <div class="ctl"><label for="set-similarity">Similarity</label>
+        <select id="set-similarity" title="how SUBJECT/OBJECT spans are compared">
+          <option value="lexical" selected>lexical (no deps)</option>
+          <option value="embedding">BERT embedding</option>
+        </select></div>
+      <div class="ctl"><label for="set-threshold">Threshold</label>
+        <input id="set-threshold" class="num" type="number" min="0" max="1" step="0.05" value="0.6"></div>
+      <button class="primary" id="set-parse" style="align-self:flex-end">Find connections</button>
+    </div>
+  </section>
+
+  <div id="set-error"></div>
+
+  <section class="card" id="setcard" hidden>
+    <div class="row-head">
+      <h2 style="margin:0">Connections graph</h2>
+      <span class="spacer"></span>
+      <div class="exports">
+        <span class="grp">data</span>
+        <button class="ghost" onclick="dlSet('json')">JSON</button>
+        <button class="ghost" onclick="dlSet('mermaid')">Mermaid</button>
+        <button class="ghost" onclick="dlSet('dot')">DOT</button>
+        <span class="sep"></span>
+        <span class="grp">knowledge graph</span>
+        <button class="ghost" onclick="dlSet('graphml')">GraphML</button>
+        <button class="ghost" onclick="dlSet('turtle')">Turtle</button>
+        <button class="ghost" onclick="dlSet('cypher')">Cypher</button>
+      </div>
+    </div>
+    <div id="connwrap"><svg id="conngraph"></svg></div>
+    <table style="margin-top:14px"><thead><tr>
+        <th>Requirement A</th><th style="width:90px">Role</th><th>Match</th>
+        <th>Requirement B</th><th style="width:70px">Score</th>
+      </tr></thead><tbody id="set-tbody"></tbody></table>
   </section>
 </main>
 
@@ -416,7 +468,116 @@ function dl(kind){
   a.download = name; a.click(); URL.revokeObjectURL(a.href);
 }
 
+/* ---- requirement set: cross-requirement SUBJECT/OBJECT connections ---- */
+const SET_EXAMPLES = [
+  ["The flight management system shall calculate the optimal cruise altitude.",
+   "The flight management system shall log every altitude change to the maintenance recorder.",
+   "The pilot shall be able to override the calculated cruise altitude.",
+   "The oxygen system shall deploy the passenger oxygen masks when the cabin altitude exceeds 14,000 feet.",
+   "The cabin pressurization system shall maintain the cabin altitude below 8,000 feet during cruise."
+  ].join("\n"),
+];
+let setLast = null;
+
+function bootSet(){
+  $("set-example").innerHTML = `<option value="">examples…</option>` + SET_EXAMPLES.map((e,i) =>
+    `<option value="${i}">example set ${i+1}</option>`).join("");
+  $("set-example").onchange = () => { if($("set-example").value!==""){
+      $("set-text").value = SET_EXAMPLES[+$("set-example").value]; parseSet(); } };
+  $("set-parse").onclick = parseSet;
+  $("set-text").value = SET_EXAMPLES[0];
+}
+
+async function parseSet(){
+  const lines = $("set-text").value.split("\n").map(s => s.trim()).filter(Boolean);
+  if(!lines.length){ showSetError("enter at least one requirement (one per line)"); return; }
+  const body = {texts: lines, template: $("template").value, backend: $("backend").value,
+                similarity: $("set-similarity").value, threshold: +$("set-threshold").value};
+  const r = await fetch("/api/connections", {method:"POST",
+      headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)});
+  const d = await r.json();
+  if(d.error){ showSetError(d.error); return; }
+  showSetError(null);
+  setLast = d;
+  $("setcard").hidden = false;
+  renderConnGraph(d);
+  renderConnTable(d);
+}
+
+function showSetError(msg){
+  $("set-error").style.display = msg ? "block" : "none";
+  $("set-error").textContent = msg || "";
+}
+
+function renderConnGraph(d){
+  const reqs = d.requirements, n = Math.max(reqs.length, 1);
+  const R = Math.max(150, n * 34);
+  const W = R * 2 + 260, H = R * 2 + 220;
+  const cx = W / 2, cy = H / 2;
+  const pos = {};
+  reqs.forEach((r, i) => {
+    const a = (2 * Math.PI * i / n) - Math.PI / 2;
+    pos[r.id] = {x: cx + R * Math.cos(a), y: cy + R * Math.sin(a)};
+  });
+  let edges = "";
+  for(const c of d.connections){
+    const p1 = pos[c.req_a], p2 = pos[c.req_b];
+    if(!p1 || !p2) continue;
+    const col = c.role === "SUBJECT" ? "#185FA5" : "#0F6E56";
+    edges += `<path d="M${p1.x},${p1.y} L${p2.x},${p2.y}" stroke="${col}"
+      stroke-width="${(1 + 3 * c.score).toFixed(2)}" fill="none" opacity="0.55">
+      <title>${esc(c.role)} ~${c.score.toFixed(2)}~ "${esc(c.text_a)}"</title></path>`;
+  }
+  let nodes = "";
+  reqs.forEach(r => {
+    const p = pos[r.id];
+    const label = r.text.length > 34 ? r.text.slice(0, 31) + "…" : r.text;
+    nodes += `<g><circle cx="${p.x}" cy="${p.y}" r="7" fill="#534AB7"/>
+      <title>${esc(r.id)}: ${esc(r.text)}</title>
+      <text x="${p.x}" y="${p.y - 12}" text-anchor="middle" font-size="11"
+        font-weight="600" fill="#2c2c2a">${esc(r.id)}</text>
+      <text x="${p.x}" y="${p.y + 18}" text-anchor="middle" font-size="9.5"
+        fill="#6f6e68">${esc(label)}</text></g>`;
+  });
+  const svg = $("conngraph");
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.setAttribute("width", W); svg.setAttribute("height", H);
+  svg.innerHTML = edges + nodes;
+}
+
+function renderConnTable(d){
+  $("set-tbody").innerHTML = d.connections.map(c => {
+    const col = c.role === "SUBJECT" ? "#185FA5" : "#0F6E56";
+    const tx = c.role === "SUBJECT" ? "#0C447C" : "#085041";
+    return `<tr><td>${esc(c.req_a)}</td>
+      <td><span style="font-size:11px;padding:2px 9px;border-radius:99px;
+        border:1px solid ${col};color:${tx}">${c.role}</span></td>
+      <td>${esc(c.text_a)} &harr; ${esc(c.text_b)}</td>
+      <td>${esc(c.req_b)}</td><td>${c.score.toFixed(2)}</td></tr>`;
+  }).join("") || `<tr><td colspan="5" style="color:var(--muted)">
+      no connections found above the threshold</td></tr>`;
+}
+
+function dlSet(kind){
+  if(!setLast) return;
+  const map = {
+    json:   [JSON.stringify({requirements: setLast.requirements,
+             connections: setLast.connections}, null, 2), "requirement_set.json", "application/json"],
+    mermaid:[setLast.mermaid, "requirement_set.mmd", "text/plain"],
+    dot:    [setLast.dot, "requirement_set.dot", "text/plain"],
+    graphml:[setLast.graphml, "requirement_set.graphml", "application/xml"],
+    turtle: [setLast.turtle, "requirement_set.ttl", "text/turtle"],
+    cypher: [setLast.cypher, "requirement_set.cypher", "text/plain"],
+  };
+  const [data, name, mime] = map[kind];
+  if(data == null) return;
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([data], {type:mime}));
+  a.download = name; a.click(); URL.revokeObjectURL(a.href);
+}
+
 boot();
+bootSet();
 </script>
 </body>
 </html>
