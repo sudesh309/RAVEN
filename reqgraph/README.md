@@ -86,6 +86,268 @@ g = parser.parse("When the pressure drops, the controller shall close the valve.
 For production accuracy use `bert-base-uncased` (or a domain model) and a few
 hundred labelled requirements. `bert-tiny` is the fast smoke-test default.
 
+---
+
+## Extraction backends
+
+All three backends implement the same `Extractor` interface and return a list of
+**Claims** — typed character spans `(start, end, Role, attrs)`. The lossless
+tiler converts claims into the graph, so swapping backends never changes the
+round-trip guarantee; at worst, a weaker backend mislabels some spans.
+
+```
+text ──(Extractor)──▶ Claims ──(lossless Tiler)──▶ RequirementGraph
+                     ^^^^^^^^
+          every backend must only propose spans;
+          corruption is architecturally impossible
+```
+
+### Rules backend (default)
+
+**Import:** `from reqgraph.extractors import RuleExtractor`  
+**Dependencies:** none — pure Python stdlib  
+**Speed:** ~0.05 ms per requirement (~22,000 req/s)
+
+The rule backend uses the keyword sets from your `Template` (condition markers,
+modality keywords, constraint markers, etc.) compiled into regular expressions
+cached once per template. It works by progressively **narrowing a search
+window** through six stages:
+
+| Stage | What it finds | How |
+|---|---|---|
+| 1 | Leading **condition** | `cond_lead` regex at text start; ends at the last comma before the modality (protects "14,000 feet") or at `then` |
+| 2 | **Modality** + **Subject** | First modality keyword after the condition; everything between the condition and the modality becomes the Subject |
+| 3 | Trailing **condition** | Condition marker after the modality (e.g. `"if the parking brake is set"`) |
+| 4 | Trailing **constraint** | Constraint marker after the modality (e.g. `"within 4 seconds"`) |
+| 5 | **Function type** | Rupp type-2 pattern `"provide <whom> with the ability to"` → `ACTOR`; `"be able to"` → interface requirement |
+| 6 | **Action core** | Top-level conjunction followed by a non-determiner word splits two actions; first determiner within an action splits `PROCESS` from `OBJECT` |
+
+**Best for:** boilerplate IREB/Rupp and EARS requirements; CI pipelines where
+determinism and zero dependencies matter; audit trails that require repeatable
+output.
+
+**Limitations:** rigid keyword anchoring — unusual word order or heavily
+subordinated clauses can fool the window logic. Free-prose requirements with
+no recognised modality yield mostly `GLUE` (text is still preserved losslessly).
+
+```python
+from reqgraph import RequirementParser, RUPP_TEMPLATE
+from reqgraph.extractors import RuleExtractor
+
+g = RequirementParser(RUPP_TEMPLATE, RuleExtractor()).parse(
+    "When the cabin altitude exceeds 14,000 feet, "
+    "the oxygen system shall deploy the passenger oxygen masks within 4 seconds.")
+# → CONDITION / SUBJECT / MODALITY / PROCESS / OBJECT / CONSTRAINT — all correct
+```
+
+---
+
+### spaCy backend
+
+**Import:** `from reqgraph.extractors import SpacyExtractor`  
+**Dependencies:** `pip install spacy && python -m spacy download en_core_web_sm`  
+**Speed:** ~5–15 ms per requirement (spaCy pipeline loaded once, cached)
+
+The spaCy backend runs the full spaCy NLP pipeline to obtain a **dependency
+parse tree**, then maps linguistic relations to IREB roles:
+
+| Dependency relation | Maps to |
+|---|---|
+| `advcl` subtree (subordinate adverbial clause) | `CONDITION` — pre- or post-condition depending on position relative to the ROOT verb |
+| `prep` headed by a constraint marker | `CONSTRAINT` |
+| Rupp "provide X with the ability to" pattern | `ACTOR` (the `X` span) |
+| ROOT verb's `aux`/`auxpass` child with modal tag `MD` | `MODALITY` |
+| ROOT verb's `nsubj`/`nsubjpass` subtree | `SUBJECT` |
+| ROOT verb + all `conj` verbs (coordinated root verbs) | one `PROCESS` each |
+| `dobj`/`obj`/`attr` children of each verb | `OBJECT` |
+| `dative` children | `ACTOR` |
+
+If spaCy finds no ROOT token the backend falls back to `RuleExtractor`
+automatically.
+
+**Best for:** complex sentences with deeply embedded clauses, passive voice,
+co-ordinated verbs, or free prose that does not follow IREB boilerplate.
+
+**Limitations:** weaker on the Rupp "provide … with the ability to" construction
+(mitigated by the regex fallback inside the backend); heavier runtime (~80 MB
+model in memory); non-deterministic across spaCy versions.
+
+```python
+from reqgraph import RequirementParser, RUPP_TEMPLATE
+from reqgraph.extractors import SpacyExtractor
+
+g = RequirementParser(RUPP_TEMPLATE, SpacyExtractor()).parse(
+    "While the aircraft is on the ground, the avionics suite shall provide "
+    "the pilot with the ability to configure the flight plan "
+    "if the parking brake is set.")
+# dependency tree correctly identifies the nested conditions and actor
+```
+
+To use a larger, more accurate model:
+
+```python
+SpacyExtractor(model="en_core_web_trf")   # transformer-based, much more accurate
+```
+
+---
+
+### BERT token-tagger backend
+
+**Import:** `from reqgraph.extractors import BertTaggerExtractor`  
+**Dependencies:** `pip install torch transformers`  
+**Speed:** ~10–30 ms per requirement on CPU (model loaded once; GPU used automatically)
+
+The BERT backend fine-tunes a **token classifier** on your labelled requirements
+and uses it to assign an IREB role to every WordPiece token. It works in two
+phases:
+
+#### Training phase
+
+```
+labelled data  →  BertTokenTagger.train()
+  [(text, [(start, end, Role), ...]), ...]
+       │
+       ▼
+  tokenizer(text, return_offsets_mapping=True)
+       │  maps character spans → BIO token labels
+       │  (B-SUBJECT, I-SUBJECT, B-MODALITY, ..., O)
+       │  special tokens ([CLS], [SEP]) → label -100 (ignored by loss)
+       ▼
+  AutoModelForTokenClassification (BERT + linear head)
+  trained with AdamW + CrossEntropy over BIO labels
+       │
+       ▼
+  model.eval() → save_pretrained(dir)
+```
+
+#### Inference phase
+
+```
+text  →  tokenizer(offsets)  →  model logits [1, T, |labels|]
+       →  argmax per token  →  BIO label sequence
+       →  span reconstruction via offset mapping
+       →  [(start, end, Role)]  →  Claims for the tiler
+```
+
+**Choosing a base model:**
+
+| Checkpoint | Use case |
+|---|---|
+| `prajjwal1/bert-tiny` | Smoke-test / CI (ships as default; weak accuracy) |
+| `bert-base-uncased` | General production use (recommended starting point) |
+| `bert-base-cased` | Domain text where case carries meaning (e.g. product names) |
+| Domain-specific BERT | Best accuracy when pre-trained on requirements engineering or your industry corpus |
+
+**Training data:** the built-in seed corpus (`reqgraph/seed_data.py`) contains
+30 labelled aerospace requirements. For production-grade accuracy, annotate a
+few hundred requirements from your own domain using the same `(text, spans)`
+format and pass them to `BertTokenTagger.train()`.
+
+```python
+from reqgraph.nlp import BertTokenTagger
+from reqgraph.extractors import BertTaggerExtractor
+from reqgraph import RequirementParser, RUPP_TEMPLATE, Role
+
+# Annotate your requirements
+my_data = [
+    ("The sensor shall measure the cabin pressure.",
+     [(0, 10, Role.SUBJECT), (11, 16, Role.MODALITY),
+      (17, 24, Role.PROCESS), (25, 44, Role.OBJECT)]),
+    # ... hundreds more
+]
+
+# Train and save
+tagger = BertTokenTagger("bert-base-uncased").train(my_data, epochs=40)
+tagger.save("models/my_tagger")
+
+# Use in the parser
+g = RequirementParser(
+    RUPP_TEMPLATE,
+    BertTaggerExtractor(model_dir="models/my_tagger")
+).parse("The controller shall isolate the faulty channel.")
+```
+
+**Via CLI:**
+
+```bash
+# Train on the built-in seed corpus
+python -m reqgraph train --model bert-base-uncased --epochs 80 --out models/req_tagger
+
+# Parse using the saved tagger
+python -m reqgraph parse "The system shall close the valve." \
+    --backend bert --model models/req_tagger --format elements
+```
+
+**Best for:** domain-specific vocabularies, requirements that don't follow IREB
+boilerplate, high-volume pipelines where you can invest in labelling, or when
+the rule/spaCy backends consistently mislabel the same patterns.
+
+**Limitations:** requires labelled training data; `bert-tiny` is for testing
+only; runs significantly slower than rules on CPU; output varies slightly with
+PyTorch version and hardware.
+
+---
+
+### Choosing a backend
+
+| Criterion | Rules | spaCy | BERT |
+|---|---|---|---|
+| Zero dependencies | ✓ | — | — |
+| Deterministic output | ✓ | — | — |
+| Complex/nested sentences | limited | ✓ | ✓ |
+| Domain-specific vocabulary | limited | limited | ✓ (with training) |
+| Speed | fastest | medium | slowest |
+| Training data required | none | none | yes |
+| Good for CI/traceability | ✓ | — | — |
+
+When in doubt, start with **Rules**. Add **spaCy** if you have complex,
+free-prose sentences. Switch to **BERT** only when you have labelled data and
+the other two backends consistently produce incorrect labels for your domain.
+
+---
+
+## Compound requirement detection
+
+When a single text contains more than one modality clause ("The system shall X
+**and the controller shall Y**"), reqgraph automatically detects and splits it
+into independent requirements before parsing each one separately.
+
+```python
+from reqgraph import RequirementParser, RUPP_TEMPLATE
+
+p = RequirementParser(RUPP_TEMPLATE)
+
+# auto-split into independent statements
+segments = p.split(
+    "The pump shall start within 2 seconds and the controller shall log the event.")
+# → ['The pump shall start within 2 seconds',
+#    'the controller shall log the event.']
+
+# parse each segment into its own graph
+graphs = p.parse_many(
+    "The pump shall start within 2 seconds and the controller shall log the event.",
+    metadata={"id": "REQ-10"})
+# → two RequirementGraph objects; metadata ids become REQ-10-1, REQ-10-2
+
+# or as a standalone helper
+from reqgraph import split_requirements
+split_requirements(text, template)
+```
+
+Compound actions under a single modality (`"shall shut off the engine and
+activate the suppression system"`) are correctly kept as one atomic requirement.
+
+The **quality checker** also flags unsplit compound requirements with a
+`compound_requirement` smell, causing a penalty on the quality score.
+
+**CLI:** `reqgraph parse` auto-splits and prints each requirement separately.
+Pass `--no-split` to parse as a single unit.
+
+**GUI:** an amber warning banner appears when compound input is detected, with
+clickable tabs to navigate each split requirement's graph independently.
+
+---
+
 ### Custom requirement structure (R4)
 
 ```python
