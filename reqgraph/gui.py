@@ -48,6 +48,63 @@ logger = logging.getLogger(__name__)
 _STATIC_DIR = Path(__file__).parent / "static"
 DEFAULT_BERT_DIR = os.path.join("models", "req_tagger")
 
+# Human-readable "how it works" copy surfaced in the GUI so users understand
+# what each configuration choice actually does. Served via /api/info.
+BACKEND_INFO = {
+    "rules": {
+        "title": "Rule-based · deterministic",
+        "how": "Compiles your template's keyword sets (modality, condition, "
+               "constraint markers) into regular expressions and narrows the "
+               "sentence in six stages: leading condition → modality + subject "
+               "→ trailing condition → constraint → function type → "
+               "action/object split.",
+        "best": "Boilerplate IREB/Rupp & EARS requirements; CI pipelines and "
+                "audit trails where repeatable, explainable output matters.",
+        "needs": "No dependencies — pure Python. ~0.05 ms per requirement.",
+    },
+    "spacy": {
+        "title": "spaCy · dependency parse",
+        "how": "Runs the spaCy NLP pipeline to build a grammatical dependency "
+               "tree, then maps relations to roles: advcl → CONDITION, nsubj → "
+               "SUBJECT, modal aux → MODALITY, dobj → OBJECT, coordinated verbs "
+               "→ multiple PROCESS. Falls back to rules if no ROOT verb is found.",
+        "best": "Complex, nested, or free-prose sentences that don't follow a "
+                "fixed boilerplate.",
+        "needs": "pip install spacy + a model (en_core_web_sm). ~5–15 ms/req.",
+    },
+    "bert": {
+        "title": "BERT · fine-tuned token tagger",
+        "how": "A transformer token classifier assigns an IREB role (BIO scheme) "
+               "to every word-piece, trained on labelled requirements. Character "
+               "offsets are reconstructed from the predicted tags.",
+        "best": "Domain-specific vocabulary where you have labelled data and the "
+                "other backends mislabel the same patterns.",
+        "needs": "pip install torch transformers + a trained model directory. "
+                 "~10–30 ms/req on CPU.",
+    },
+}
+
+TEMPLATE_INFO = {
+    "IREB-Rupp": "IREB / Rupp 'MASTeR' boilerplate: <CONDITION>, the <SUBJECT> "
+                 "<MODALITY> [provide <ACTOR> with the ability to] <PROCESS> "
+                 "<OBJECT> <CONSTRAINT>. The most expressive shipped structure.",
+    "EARS": "Easy Approach to Requirements Syntax (common in aerospace): "
+            "When/While/If/Where <trigger>, the <SUBJECT> shall <PROCESS> "
+            "<OBJECT>. Leaner marker set than Rupp.",
+}
+
+
+def template_info(name: str) -> str:
+    """Describe a template, deriving a generic blurb for custom ones."""
+    if name in TEMPLATE_INFO:
+        return TEMPLATE_INFO[name]
+    t = TEMPLATES.get(name)
+    if t is None:
+        return ""
+    mods = ", ".join(t.modality_keywords[:4])
+    return (f"Custom template. Modality keywords: {mods}…  "
+            f"Slots: {' → '.join(r.value for r in t.slot_order)}.")
+
 
 class GuiState:
     """Shared, thread-safe backend registry for the GUI server."""
@@ -118,7 +175,8 @@ def _compute_kpis(g, text: str, parse_ms: float) -> dict:
         ("missing_modality", "missing modality"),
         ("passive_voice", "passive voice"),
         ("vague_quantifier", "vague quantifier"),
-        ("non_atomic", "non-atomic"))
+        ("non_atomic", "non-atomic"),
+        ("compound_requirement", "compound requirement"))
         if q.get(key)]
     weak = list(q.get("weak_words", []))
     score = max(0, 100 - 20 * len(smells) - 10 * len(weak))
@@ -157,6 +215,9 @@ def _requirement_payload(parser: RequirementParser, text: str) -> dict:
                       "attrs": n.attrs} for n in g.elements()],
         "mermaid": g.to_mermaid(),
         "dot": g.to_dot(),
+        "cypher": g.to_cypher(),
+        "graphml": g.to_graphml(),
+        "turtle": g.to_turtle(),
         "graph": g.to_dict(),
     }
 
@@ -223,6 +284,9 @@ class _Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/info":
             self._send_json({"templates": sorted(TEMPLATES),
                              "backends": self.state.backends(),
+                             "backend_info": BACKEND_INFO,
+                             "template_info": {n: template_info(n)
+                                               for n in sorted(TEMPLATES)},
                              "version": __version__})
         else:
             self.send_error(404)

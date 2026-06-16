@@ -30,7 +30,7 @@ text to graph and back, including the ML, quality, and I/O pipelines.
 ├────────────────────────────────────────────────────────────────────────┤
 │                            MODEL LAYER                                 │
 │   core.RequirementGraph / Node / Edge / Role / Rel                     │
-│   exporters: JSON · Mermaid · DOT · Cypher · networkx                  │
+│   exporters: JSON · Mermaid · DOT · Cypher · GraphML · Turtle · networkx│
 │   errors.py (exception hierarchy)  ·  logging (per-module loggers)     │
 └────────────────────────────────────────────────────────────────────────┘
 ```

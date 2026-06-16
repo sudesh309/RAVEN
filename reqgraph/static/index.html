@@ -61,6 +61,37 @@
                border:1px solid}
   .row-head{display:flex;align-items:center;gap:8px}
   .row-head .spacer{flex:1}
+  /* compound-requirement warning banner */
+  #compound-banner{display:none;border-radius:12px;padding:14px 18px;
+    background:#FFF8E6;border:1px solid #E5A020;color:#7A4B00}
+  #compound-banner .cb-head{font-weight:600;font-size:14px;margin-bottom:6px}
+  #compound-banner .cb-tabs{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+  .reqtab{cursor:pointer;font-size:13px;padding:6px 14px;border-radius:8px;
+    border:1.5px solid #E5A020;background:#fff;color:#7A4B00;text-align:left}
+  .reqtab:hover{background:#FFF0CC}
+  .reqtab.active{background:#E5A020;color:#fff;border-color:#E5A020;font-weight:600}
+  /* context label shown above analysis sections when viewing one of N reqs */
+  .req-context{font-size:12px;color:var(--muted);margin-bottom:8px;
+    padding:5px 10px;background:var(--bg);border-radius:6px;display:none}
+  /* labelled control groups */
+  .ctl{display:flex;flex-direction:column;gap:3px}
+  .ctl label{font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;
+    color:var(--muted);font-weight:600}
+  /* "how it works" configuration explainer */
+  #config-info{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px}
+  .ci-box{background:var(--accent-soft);border:1px solid #d9d6f5;border-radius:10px;
+    padding:12px 14px}
+  .ci-box .ci-title{font-size:13px;font-weight:650;color:var(--accent);
+    margin-bottom:4px;display:flex;align-items:center;gap:6px}
+  .ci-box .ci-how{font-size:12.5px;color:var(--text);line-height:1.55}
+  .ci-box .ci-meta{font-size:11.5px;color:var(--muted);margin-top:7px}
+  .ci-box .ci-meta b{color:var(--text);font-weight:600}
+  @media(max-width:720px){#config-info{grid-template-columns:1fr}}
+  /* export button group */
+  .exports{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+  .exports .grp{font-size:10.5px;letter-spacing:.04em;text-transform:uppercase;
+    color:var(--muted);margin-right:2px}
+  .exports .sep{width:1px;height:18px;background:var(--border);margin:0 4px}
 </style>
 </head>
 <body>
@@ -74,25 +105,34 @@
     <h2>Requirement</h2>
     <textarea id="text" spellcheck="false"></textarea>
     <div class="controls">
-      <select id="example" title="examples"></select>
-      <select id="template" title="template"></select>
-      <select id="backend" title="extraction backend"></select>
-      <button class="primary" id="parse">Parse &rarr; graph</button>
+      <div class="ctl"><label for="example">Example</label>
+        <select id="example" title="load an example"></select></div>
+      <div class="ctl"><label for="template">Template</label>
+        <select id="template" title="requirement structure"></select></div>
+      <div class="ctl"><label for="backend">Backend</label>
+        <select id="backend" title="extraction backend"></select></div>
+      <button class="primary" id="parse" style="align-self:flex-end">Parse &rarr; graph</button>
       <span class="hint">Ctrl+Enter parses</span>
+    </div>
+    <div id="config-info">
+      <div class="ci-box" id="ci-backend"></div>
+      <div class="ci-box" id="ci-template"></div>
     </div>
   </section>
 
   <div id="error"></div>
 
-  <section class="card" id="multicard" hidden>
-    <h2 id="multihead"></h2>
-    <div id="multibtns" class="controls" style="margin-top:0"></div>
-  </section>
+  <div id="compound-banner">
+    <div class="cb-head" id="compound-head"></div>
+    <div id="compound-msg"></div>
+    <div class="cb-tabs" id="compound-tabs"></div>
+  </div>
 
   <section class="kpis" id="kpis" hidden></section>
 
   <section class="card" id="tilecard" hidden>
     <h2>Tiled elements &mdash; every character belongs to one node</h2>
+    <div class="req-context" id="tile-ctx"></div>
     <div id="tiles"></div>
     <div id="legend"></div>
   </section>
@@ -101,16 +141,28 @@
     <div class="row-head">
       <h2 style="margin:0">Semantic graph</h2>
       <span class="spacer"></span>
-      <button class="ghost" onclick="dl('svg')">SVG</button>
-      <button class="ghost" onclick="dl('json')">JSON</button>
-      <button class="ghost" onclick="dl('mermaid')">Mermaid</button>
-      <button class="ghost" onclick="dl('dot')">DOT</button>
+      <div class="exports">
+        <span class="grp">image</span>
+        <button class="ghost" onclick="dl('svg')">SVG</button>
+        <span class="sep"></span>
+        <span class="grp">data</span>
+        <button class="ghost" onclick="dl('json')">JSON</button>
+        <button class="ghost" onclick="dl('mermaid')">Mermaid</button>
+        <button class="ghost" onclick="dl('dot')">DOT</button>
+        <span class="sep"></span>
+        <span class="grp">knowledge graph</span>
+        <button class="ghost" onclick="dl('graphml')">GraphML</button>
+        <button class="ghost" onclick="dl('turtle')">Turtle</button>
+        <button class="ghost" onclick="dl('cypher')">Cypher</button>
+      </div>
     </div>
+    <div class="req-context" id="graph-ctx"></div>
     <div id="graphwrap"><svg id="graph"></svg></div>
   </section>
 
   <section class="card" id="tablecard" hidden>
     <h2>Element table</h2>
+    <div class="req-context" id="table-ctx"></div>
     <table><thead><tr><th style="width:140px">Role</th><th>Text</th>
       <th style="width:260px">Attributes</th></tr></thead>
       <tbody id="tbody"></tbody></table>
@@ -139,12 +191,12 @@ const EXAMPLES = [
  "The system should be fast and user-friendly and reliable.",
  "The fuel pump shall start within 2 seconds and the controller shall log the start event.",
 ];
-let last = null, reqs = [], curReq = 0;
+let last = null, reqs = [], curReq = 0, INFO = null;
 
 const $ = id => document.getElementById(id);
 
 async function boot(){
-  const info = await (await fetch("/api/info")).json();
+  const info = INFO = await (await fetch("/api/info")).json();
   $("ver").textContent = "v" + info.version;
   $("template").innerHTML = info.templates.map(t =>
     `<option ${t==="IREB-Rupp"?"selected":""}>${t}</option>`).join("");
@@ -155,10 +207,30 @@ async function boot(){
   $("example").onchange = () => { if($("example").value!==""){
       $("text").value = EXAMPLES[+$("example").value]; parse(); } };
   $("parse").onclick = parse;
+  // re-parse and refresh the explainer when a config choice changes
+  $("backend").onchange = () => { renderConfigInfo(); parse(); };
+  $("template").onchange = () => { renderConfigInfo(); parse(); };
   $("text").addEventListener("keydown", e => {
       if(e.key==="Enter" && (e.ctrlKey||e.metaKey)) parse(); });
   $("text").value = EXAMPLES[0];
+  renderConfigInfo();
   parse();
+}
+
+function renderConfigInfo(){
+  if(!INFO) return;
+  const b = $("backend").value, bi = (INFO.backend_info||{})[b];
+  if(bi){
+    $("ci-backend").innerHTML =
+      `<div class="ci-title">⚙️ Backend — ${esc(bi.title)}</div>
+       <div class="ci-how">${esc(bi.how)}</div>
+       <div class="ci-meta"><b>Best for:</b> ${esc(bi.best)}</div>
+       <div class="ci-meta"><b>Requires:</b> ${esc(bi.needs)}</div>`;
+  } else { $("ci-backend").innerHTML = ""; }
+  const t = $("template").value, ti = (INFO.template_info||{})[t];
+  $("ci-template").innerHTML = ti
+    ? `<div class="ci-title">📐 Template — ${esc(t)}</div>
+       <div class="ci-how">${esc(ti)}</div>` : "";
 }
 
 async function parse(){
@@ -170,31 +242,44 @@ async function parse(){
   if(d.error){ showError(d.error); return; }
   showError(null);
   reqs = d.requirements || [d];
-  renderMulti();
+  renderBanner();
   showReq(0);
 }
 
-function renderMulti(){
-  const card = $("multicard");
-  if(reqs.length < 2){ card.hidden = true; return; }
-  card.hidden = false;
-  $("multihead").textContent =
-    `${reqs.length} requirements detected — pick one to inspect`;
-  $("multibtns").innerHTML = reqs.map((r, i) =>
-    `<button class="ghost reqtab" data-i="${i}" title="${esc(r.text)}">
-       ${i+1}: ${esc(r.text.length > 52 ? r.text.slice(0,52) + "…" : r.text)}
+function renderBanner(){
+  const banner = $("compound-banner");
+  if(reqs.length < 2){ banner.style.display = "none"; return; }
+  banner.style.display = "block";
+  $("compound-head").textContent =
+    `⚠️ Compound input — ${reqs.length} requirements detected`;
+  $("compound-msg").textContent =
+    "Your text contains multiple modality clauses. Each has been split into an " +
+    "independent requirement and parsed separately. Select one to inspect its graph.";
+  $("compound-tabs").innerHTML = reqs.map((r, i) =>
+    `<button class="reqtab" data-i="${i}">
+       <strong>${i+1} of ${reqs.length}</strong>&nbsp;&nbsp;${esc(r.text.length > 60 ? r.text.slice(0,60) + "…" : r.text)}
      </button>`).join("");
   for(const b of document.querySelectorAll(".reqtab"))
     b.onclick = () => showReq(+b.dataset.i);
+}
+
+function setCtx(label){
+  for(const id of ["tile-ctx","graph-ctx","table-ctx"]){
+    const el = $(id);
+    if(label){ el.textContent = label; el.style.display = "block"; }
+    else { el.style.display = "none"; }
+  }
 }
 
 function showReq(i){
   curReq = i;
   const d = reqs[i]; last = d;
   document.querySelectorAll(".reqtab").forEach((b, j) => {
-    b.style.borderColor = j===i ? "var(--accent)" : "";
-    b.style.color = j===i ? "var(--accent)" : "";
+    b.classList.toggle("active", j===i);
   });
+  const ctx = reqs.length > 1
+    ? `Requirement ${i+1} of ${reqs.length}: "${d.text}"` : null;
+  setCtx(ctx);
   renderKpis(d.kpis); renderTiles(d.tiles); renderGraph(d.tree); renderTable(d.elements);
   for(const id of ["kpis","tilecard","graphcard","tablecard"]) $(id).hidden = false;
 }
@@ -320,8 +405,12 @@ function dl(kind){
     json:   [JSON.stringify(last.graph, null, 2), "requirement_graph.json", "application/json"],
     mermaid:[last.mermaid, "requirement_graph.mmd", "text/plain"],
     dot:    [last.dot, "requirement_graph.dot", "text/plain"],
+    graphml:[last.graphml, "requirement_graph.graphml", "application/xml"],
+    turtle: [last.turtle, "requirement_graph.ttl", "text/turtle"],
+    cypher: [last.cypher, "requirement_graph.cypher", "text/plain"],
   };
   const [data, name, mime] = map[kind];
+  if(data == null) return;
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([data], {type:mime}));
   a.download = name; a.click(); URL.revokeObjectURL(a.href);
