@@ -350,6 +350,66 @@ clickable tabs to navigate each split requirement's graph independently.
 
 ---
 
+## Requirement sets: cross-requirement connections
+
+Beyond a single requirement's graph, reqgraph can analyze a whole **set** of
+requirements together: every item is parsed into its own graph (compound items
+are split first, exactly like `parse`), then the SUBJECT/OBJECT elements are
+compared *across* requirements to surface ones that govern the same component
+or act on the same data — useful for traceability review and for spotting
+hidden coupling that a flat list of requirements hides.
+
+```python
+from reqgraph.corpus import build_requirement_set_graph
+
+reqs = [
+    "The flight management system shall calculate the optimal cruise altitude.",
+    "The flight management system shall log every altitude change to the maintenance recorder.",
+    "The pilot shall be able to override the calculated cruise altitude.",
+]
+rsg = build_requirement_set_graph(reqs)
+
+for c in rsg.connections:
+    print(c.a.req_id, c.role.value, repr(c.a.text), "~", c.score, "~", repr(c.b.text), c.b.req_id)
+# REQ-1 SUBJECT 'The flight management system' ~ 1.0  ~ 'The flight management system' REQ-2
+# REQ-1 OBJECT  'the optimal cruise altitude'  ~ 0.73 ~ 'the calculated cruise altitude' REQ-3
+
+print(rsg.to_mermaid())   # also: to_dot(), to_graphml(), to_turtle(), to_cypher(), to_dict()
+```
+
+`items` accepts the same shapes as `io_formats`: `["text", ...]` or
+`[(id, text), ...]`.
+
+**Similarity** is pluggable via `similarity=`:
+
+* `"lexical"` (default) — token-overlap (Jaccard) blended with a character
+  sequence ratio, with determiners (`the`/`a`/`their`/...) stripped before
+  comparing so two unrelated "the X system" spans don't match just because
+  both start with "the ... system". Zero dependencies.
+* `"embedding"` — BERT cosine similarity via `reqgraph.nlp.RequirementAnalyzer`
+  (requires `torch`+`transformers`); pass `embedding_model=` to choose the
+  checkpoint.
+
+Tune `threshold` (default `0.6`) to control how strict a match must be, and
+`roles=(Role.SUBJECT, Role.OBJECT, ...)` to cross-reference other element
+types (e.g. add `Role.ACTOR`).
+
+**CLI:**
+
+```bash
+python -m reqgraph connections reqs.csv                       # human-readable report
+python -m reqgraph connections reqs.csv --format json          # full payload
+python -m reqgraph connections reqs.csv --format mermaid       # visualize
+python -m reqgraph connections reqs.csv --similarity embedding --threshold 0.85
+```
+
+**GUI:** the "Requirement set — find connections" panel accepts one
+requirement per line and renders the connections as a network graph (one node
+per requirement, edges colored by SUBJECT/OBJECT and weighted by score), plus
+the same Mermaid/DOT/GraphML/Turtle/Cypher export buttons as a single graph.
+
+---
+
 ### Custom requirement structure (R4)
 
 ```python
@@ -431,7 +491,11 @@ The page also includes:
 * one-click export to **SVG, JSON, Mermaid, DOT** and the **knowledge-graph
   formats GraphML, Turtle (RDF), and Cypher**;
 * an amber **compound-requirement warning** with per-requirement tabs when a
-  single input contains several "shall" clauses.
+  single input contains several "shall" clauses;
+* a **"Requirement set — find connections"** panel: paste a requirement set
+  (one per line) and see a network graph connecting requirements that share
+  similar SUBJECT/OBJECT elements, with the same knowledge-graph export
+  buttons.
 
 ## Knowledge graph export
 
@@ -475,6 +539,9 @@ python -m reqgraph train --model bert-base-uncased --epochs 80 --out models/req_
 # batch a spreadsheet / ReqIF set; quality + duplicate/conflict report
 python -m reqgraph batch reqs.csv --out reqs.reqif
 python -m reqgraph analyze reqs.csv
+
+# find cross-requirement SUBJECT/OBJECT connections in a set, visualize them
+python -m reqgraph connections reqs.csv --format mermaid
 ```
 
 A ready-to-use tagger trained on the 30-requirement seed corpus
@@ -492,6 +559,7 @@ reqgraph/
   nlp.py         BertTokenTagger (trainable) + RequirementAnalyzer
   quality.py     IREB quality smells + type + EARS classification
   io_formats.py  CSV / Excel / ReqIF
+  corpus.py      requirement-set SUBJECT/OBJECT cross-referencing + connections graph
 tests/           pytest suite (lossless round-trip is the headline invariant)
 ```
 

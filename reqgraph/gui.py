@@ -9,10 +9,14 @@ self-contained HTML page (``static/index.html``) plus a tiny JSON API.
 
 Endpoints
 ---------
-GET  /            the single-page app
-GET  /api/info    {templates, backends{name: available}, version}
-POST /api/parse   {text, template?, backend?} ->
-                  {kpis, tiles, tree, elements, mermaid, dot, graph, error?}
+GET  /                the single-page app
+GET  /api/info        {templates, backends{name: available}, version}
+POST /api/parse       {text, template?, backend?} ->
+                      {kpis, tiles, tree, elements, mermaid, dot, graph, error?}
+POST /api/connections  {texts: [...], template?, backend?, similarity?, threshold?, roles?} ->
+                      {requirements, connections, mermaid, dot, graphml, turtle,
+                       cypher, error?} -- cross-requirement SUBJECT/OBJECT matches
+                      across a requirement *set*, see reqgraph.corpus
 
 Design notes
 ------------
@@ -37,6 +41,7 @@ from typing import Optional
 
 from . import __version__
 from .core import Rel, Role
+from .corpus import build_requirement_set_graph
 from .errors import ReqGraphError
 from .extractors import BertTaggerExtractor, RuleExtractor, SpacyExtractor
 from .parser import RequirementParser
@@ -250,6 +255,50 @@ def parse_request(state: GuiState, payload: dict) -> dict:
     return out
 
 
+def connections_request(state: GuiState, payload: dict) -> dict:
+    """Handle one /api/connections payload: a requirement *set* in, a
+    per-requirement breakdown plus the cross-requirement SUBJECT/OBJECT
+    connections graph out (JSON + Mermaid/DOT/GraphML/Turtle/Cypher)."""
+    texts = payload.get("texts", [])
+    if not isinstance(texts, list) or not [t for t in texts if isinstance(t, str) and t.strip()]:
+        raise ReqGraphError("please enter at least one requirement (one per line)")
+    items = [t for t in texts if isinstance(t, str) and t.strip()]
+
+    template = TEMPLATES.get(payload.get("template", ""), RUPP_TEMPLATE)
+    backend = payload.get("backend", "rules")
+    similarity = payload.get("similarity", "lexical")
+    threshold = float(payload.get("threshold", 0.6))
+    role_names = payload.get("roles") or ["SUBJECT", "OBJECT"]
+    try:
+        roles = tuple(Role(r) for r in role_names)
+    except ValueError as exc:
+        raise ReqGraphError(f"unknown role: {exc}") from exc
+
+    rsg = build_requirement_set_graph(
+        items, template=template, extractor=state.extractor(backend),
+        roles=roles, threshold=threshold, similarity=similarity)
+
+    return {
+        "requirements": [{"id": rid, "text": rsg.texts[rid]} for rid in rsg.req_ids],
+        "connections": [
+            {"req_a": c.a.req_id, "req_b": c.b.req_id, "role": c.role.value,
+             "score": round(c.score, 4), "text_a": c.a.text, "text_b": c.b.text}
+            for c in rsg._dedup_pairs()
+        ],
+        "n_requirements": len(rsg.req_ids),
+        "n_connections": len(rsg.connections),
+        "mermaid": rsg.to_mermaid(),
+        "dot": rsg.to_dot(),
+        "graphml": rsg.to_graphml(),
+        "turtle": rsg.to_turtle(),
+        "cypher": rsg.to_cypher(),
+        "template": template.name,
+        "backend": backend,
+        "similarity": similarity,
+        "threshold": threshold,
+    }
+
+
 # ---------------------------------------------------------------------------
 # HTTP plumbing
 # ---------------------------------------------------------------------------
@@ -292,13 +341,16 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_error(404)
 
     def do_POST(self):
-        if self.path != "/api/parse":
+        if self.path not in ("/api/parse", "/api/connections"):
             self.send_error(404)
             return
         try:
             length = int(self.headers.get("Content-Length", 0))
             payload = json.loads(self.rfile.read(length) or b"{}")
-            self._send_json(parse_request(self.state, payload))
+            if self.path == "/api/parse":
+                self._send_json(parse_request(self.state, payload))
+            else:
+                self._send_json(connections_request(self.state, payload))
         except ReqGraphError as exc:
             self._send_json({"error": str(exc)}, status=400)
         except Exception as exc:  # never leak a traceback to the page

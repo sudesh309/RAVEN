@@ -30,6 +30,8 @@ from .tiling import tile_to_graph
 from .parser import RequirementParser, build_requirement, split_requirements
 from .extractors import (Extractor, RuleExtractor, SpacyExtractor,
                          BertTaggerExtractor, auto_select, get_extractor)
+from .corpus import (Connection, ElementRef, RequirementSetGraph,
+                     build_requirement_set_graph)
 
 # library logging etiquette: emit nothing unless the application configures it
 _logging.getLogger(__name__).addHandler(_logging.NullHandler())
@@ -40,6 +42,7 @@ __all__ = [
     "tile_to_graph", "RequirementParser", "build_requirement", "split_requirements",
     "Extractor", "RuleExtractor", "SpacyExtractor", "BertTaggerExtractor",
     "auto_select", "get_extractor",
+    "Connection", "ElementRef", "RequirementSetGraph", "build_requirement_set_graph",
     "ReqGraphError", "GraphIntegrityError", "ExtractionError",
     "TemplateError", "DataFormatError", "ModelError",
 ]

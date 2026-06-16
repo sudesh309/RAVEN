@@ -17,6 +17,7 @@ text to graph and back, including the ML, quality, and I/O pipelines.
 │   parser.RequirementParser      io_formats (CSV/Excel/ReqIF)           │
 │   parser.build_requirement      quality.enrich (smells/type/EARS)      │
 │                                 nlp.RequirementAnalyzer (dup/conflict) │
+│   corpus.build_requirement_set_graph (cross-requirement SUBJECT/OBJECT)│
 ├────────────────────────────────────────────────────────────────────────┤
 │                      EXTRACTION LAYER (Strategy)                       │
 │   extractors.Extractor (ABC)                                           │
@@ -230,15 +231,45 @@ write_csv / write_excel (pandas, openpyxl)   write_reqif (lxml: header,
 
 ---
 
+## 7a. Pipeline 5a — requirement-set connections      [corpus.py]
+
+```
+build_requirement_set_graph(items, roles=(SUBJECT,OBJECT), threshold, similarity)
+  items ─▶ _normalise_items → (id, text) pairs
+  per item: parser.split(text) → parser.parse(seg) for each segment
+            (compound items become REQ-i-1, REQ-i-2, ...; pipeline 1 reused)
+            ─▶ collect ElementRef(req_id, node_id, role, text) for each
+              SUBJECT/OBJECT (or chosen roles) element across ALL requirements
+            │
+            ▼
+  _score_fn(elements, similarity)
+    "lexical"   token-Jaccard ⊔ SequenceMatcher.ratio, stopwords stripped
+                (zero dependencies, deterministic)
+    "embedding" RequirementAnalyzer.embed(texts) → cosine similarity matrix
+            │
+            ▼
+  pairwise compare elements from DIFFERENT requirements, same role;
+  score ≥ threshold ─▶ Connection(a, b, role, score)
+            │
+            ▼
+  RequirementSetGraph(req_ids, texts, graphs, connections)
+    .to_mermaid()/.to_dot()/.to_graphml()/.to_turtle()/.to_cypher()/.to_dict()
+    — one node per requirement, one edge per (req_a, req_b, role) connection
+```
+
+---
+
 ## 8. CLI data flow                                  [__main__.py]
 
 ```
 argv ─▶ argparse (global: -v/-vv → logging level, --version)
-  parse    text ─▶ _build_parser(template, backend, model) ─▶ parse [+enrich]
-           ─▶ format switch: summary|json|mermaid|dot|cypher|elements ─▶ stdout
-  batch    infile ─▶ _read_items (by extension) ─▶ dataframe/writers ─▶ out
-  train    seed corpus | JSONL ─▶ BertTokenTagger.train ─▶ save dir
-  analyze  infile ─▶ per-row enrich report + embed dup/conflict report
+  parse        text ─▶ _build_parser(template, backend, model) ─▶ parse [+enrich]
+               ─▶ format switch: summary|json|mermaid|dot|cypher|elements ─▶ stdout
+  batch        infile ─▶ _read_items (by extension) ─▶ dataframe/writers ─▶ out
+  train        seed corpus | JSONL ─▶ BertTokenTagger.train ─▶ save dir
+  analyze      infile ─▶ per-row enrich report + embed dup/conflict report
+  connections  infile ─▶ build_requirement_set_graph ─▶ text|json|mermaid|dot|
+               graphml|turtle|cypher (pipeline 5a)
 errors: any ReqGraphError ─▶ exit("error: …")  (no tracebacks for users)
 ```
 
@@ -261,6 +292,15 @@ gui.parse_request (pure function)
   ▼
 JSON ──▶ browser JS renders: KPI cards · tiled text · SVG tree layout
          (leaf-slot tidy layout, role color map) · element table · downloads
+
+        ──POST /api/connections {texts, template, backend, similarity,
+                                  threshold, roles}──▶
+gui.connections_request (pure function) ─▶ build_requirement_set_graph
+         (pipeline 5a) ─▶ JSON {requirements, connections, mermaid, dot,
+                                 graphml, turtle, cypher}
+  ▼
+browser JS renders: circular network graph (one node per requirement, edges
+colored/weighted by role+score) · connections table · downloads
 Security: server binds 127.0.0.1 only; errors → {error} JSON, never tracebacks.
 ```
 
@@ -311,3 +351,4 @@ errors.ReqGraphError
 | new element role | `core.Role` (+ `TERMINAL_ROLES`), emit it from an extractor | tiling keeps working |
 | new export format | method on `RequirementGraph` | — |
 | better ML | swap `model_name` (e.g. `bert-base-uncased`), retrain | same train/save/load API |
+| new cross-requirement similarity metric | `_score_fn` in `corpus.py` | `build_requirement_set_graph`, CLI/GUI unchanged |
