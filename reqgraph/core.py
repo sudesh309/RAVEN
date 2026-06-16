@@ -34,6 +34,18 @@ def _dot_label(s: str) -> str:
     return s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
 
+def _xml_escape(s: str) -> str:
+    """Escape text for an XML element/attribute body (GraphML)."""
+    return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+             .replace('"', "&quot;"))
+
+
+def _ttl_literal(s: str) -> str:
+    """Escape a string for a Turtle double-quoted literal."""
+    return (s.replace("\\", "\\\\").replace('"', '\\"')
+             .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t"))
+
+
 class Role(str, Enum):
     """Semantic role of a requirement element, aligned with IREB/Rupp."""
     ROOT = "ROOT"
@@ -282,6 +294,80 @@ class RequirementGraph:
         for e in self.edges:
             g.add_edge(e.source, e.target, rel=e.rel.value, **e.attrs)
         return g
+
+    def to_graphml(self, show_glue: bool = False) -> str:
+        """GraphML (XML) knowledge graph — readable by yEd, Gephi, networkx, Cytoscape.
+
+        Node attributes (``role``, ``text`` and any extras as a JSON ``attrs``
+        string) and the edge ``rel`` are declared as typed ``<key>`` elements so
+        the file is valid GraphML. Built with the standard library only.
+        """
+        ns = "http://graphml.graphdrawing.org/xmlns"
+        lines = ['<?xml version="1.0" encoding="UTF-8"?>',
+                 f'<graphml xmlns="{ns}">',
+                 '  <key id="role" for="node" attr.name="role" attr.type="string"/>',
+                 '  <key id="text" for="node" attr.name="text" attr.type="string"/>',
+                 '  <key id="attrs" for="node" attr.name="attrs" attr.type="string"/>',
+                 '  <key id="rel" for="edge" attr.name="rel" attr.type="string"/>',
+                 f'  <graph id="{_xml_escape(self.template_name or "requirement")}" '
+                 'edgedefault="directed">']
+        for n in self.nodes.values():
+            if n.role is Role.GLUE and not show_glue:
+                continue
+            lines.append(f'    <node id="{_xml_escape(n.id)}">')
+            lines.append(f'      <data key="role">{_xml_escape(n.role.value)}</data>')
+            if n.text.strip():
+                lines.append(f'      <data key="text">{_xml_escape(n.text.strip())}</data>')
+            if n.attrs:
+                lines.append('      <data key="attrs">'
+                             f'{_xml_escape(json.dumps(n.attrs, ensure_ascii=False))}</data>')
+            lines.append('    </node>')
+        for i, e in enumerate(self.edges):
+            if e.rel is Rel.NEXT:
+                continue
+            if not show_glue and self.nodes[e.target].role is Role.GLUE:
+                continue
+            lines.append(f'    <edge id="e{i}" source="{_xml_escape(e.source)}" '
+                         f'target="{_xml_escape(e.target)}">')
+            lines.append(f'      <data key="rel">{_xml_escape(e.rel.value)}</data>')
+            lines.append('    </edge>')
+        lines.append('  </graph>')
+        lines.append('</graphml>')
+        return "\n".join(lines)
+
+    def to_turtle(self, base: str = "http://reqgraph.org/ns#",
+                  show_glue: bool = False) -> str:
+        """RDF Turtle (.ttl) knowledge graph — loadable into any triple store.
+
+        Each element becomes a typed resource (``a rg:<Role>``) carrying its text
+        as ``rdfs:label`` / ``rg:text`` plus any attributes as ``rg:<attr>``;
+        relationships become predicates (``rg:<Rel>``) between resources.
+        """
+        prefix = "rg"
+        lines = [f"@prefix {prefix}: <{base}> .",
+                 "@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .",
+                 "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .",
+                 ""]
+        for n in self.nodes.values():
+            if n.role is Role.GLUE and not show_glue:
+                continue
+            triples = [f"a {prefix}:{n.role.value}"]
+            if n.text.strip():
+                lit = f'"{_ttl_literal(n.text.strip())}"'
+                triples.append(f"rdfs:label {lit}")
+                triples.append(f"{prefix}:text {lit}")
+            for k, v in n.attrs.items():
+                triples.append(f'{prefix}:{k} "{_ttl_literal(str(v))}"')
+            body = " ;\n    ".join(triples)
+            lines.append(f"{prefix}:{n.id} {body} .")
+        lines.append("")
+        for e in self.edges:
+            if e.rel is Rel.NEXT:
+                continue
+            if not show_glue and self.nodes[e.target].role is Role.GLUE:
+                continue
+            lines.append(f"{prefix}:{e.source} {prefix}:{e.rel.value} {prefix}:{e.target} .")
+        return "\n".join(lines)
 
     def summary(self) -> str:
         lines = []

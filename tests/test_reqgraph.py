@@ -195,6 +195,57 @@ def test_exporters_smoke():
     assert "CREATE" in g.to_cypher()
 
 
+def test_graphml_is_well_formed_xml():
+    import xml.dom.minidom as minidom
+    g = RequirementParser(RUPP_TEMPLATE).parse(REQS[1])
+    gml = g.to_graphml()
+    assert gml.startswith("<?xml")
+    assert "<graphml" in gml and "edgedefault=\"directed\"" in gml
+    # must parse as valid XML (raises otherwise)
+    minidom.parseString(gml)
+    # nodes carry their role; condition span is present
+    assert ">CONDITION<" in gml
+    assert ">SUBJECT<" in gml
+
+
+def test_graphml_escapes_special_chars():
+    import xml.dom.minidom as minidom
+    text = 'The system shall display the "ALT < HOLD" & status annunciation.'
+    g = RequirementParser(RUPP_TEMPLATE).parse(text)
+    gml = g.to_graphml()
+    minidom.parseString(gml)             # raw <, &, " would break this
+    assert g.generate() == text          # still lossless
+
+
+def test_turtle_export_structure():
+    g = RequirementParser(RUPP_TEMPLATE).parse(REQS[1])
+    ttl = g.to_turtle()
+    assert "@prefix rg:" in ttl
+    assert "a rg:SUBJECT" in ttl
+    assert "a rg:MODALITY" in ttl
+    # relationship predicates between resources
+    assert "rg:HAS_MODALITY" in ttl
+    # text is escaped/quoted; quotes in content must not break the literal
+    text = 'The system shall display the "ALT HOLD" annunciation.'
+    ttl2 = RequirementParser(RUPP_TEMPLATE).parse(text).to_turtle()
+    assert '\\"ALT HOLD\\"' in ttl2
+
+
+def test_graphml_turtle_skip_glue_by_default():
+    g = RequirementParser(RUPP_TEMPLATE).parse(REQS[1])
+    assert ">GLUE<" not in g.to_graphml()
+    assert "rg:GLUE" not in g.to_turtle()
+    assert ">GLUE<" in g.to_graphml(show_glue=True)
+
+
+def test_cli_parse_graphml_and_turtle(capsys):
+    from reqgraph.__main__ import main
+    assert main(["parse", REQS[0], "--format", "graphml"]) == 0
+    assert "<graphml" in capsys.readouterr().out
+    assert main(["parse", REQS[0], "--format", "turtle"]) == 0
+    assert "@prefix rg:" in capsys.readouterr().out
+
+
 # --- quality / classification ----------------------------------------------
 
 def test_quality_and_classification():
@@ -385,6 +436,10 @@ def test_gui_parse_request_payload():
     assert "".join(t["text"] for t in d["tiles"]) == REQS[1]   # tiling = lossless
     roles = {e["role"] for e in d["elements"]}
     assert {"CONDITION", "SUBJECT", "MODALITY", "CONSTRAINT"} <= roles
+    # knowledge-graph exports are included in the payload
+    assert "<graphml" in d["graphml"]
+    assert "@prefix rg:" in d["turtle"]
+    assert "CREATE" in d["cypher"]
 
 
 def test_gui_parse_request_rejects_empty():
@@ -409,6 +464,9 @@ def test_gui_server_smoke():
         assert "reqgraph studio" in page
         info = _json.load(urllib.request.urlopen(f"{base}/api/info", timeout=10))
         assert info["backends"]["rules"] is True
+        # config explainer content is served for the UI
+        assert "how" in info["backend_info"]["rules"]
+        assert info["template_info"]["IREB-Rupp"]
         req = urllib.request.Request(
             f"{base}/api/parse",
             data=_json.dumps({"text": REQS[0]}).encode(),

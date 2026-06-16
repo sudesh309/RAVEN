@@ -55,6 +55,8 @@ print(g.summary())
 assert g.generate() == text          # lossless, always
 
 print(g.to_mermaid())                # also: to_dot(), to_cypher(), to_networkx(), to_json()
+print(g.to_graphml())                # GraphML knowledge graph (yEd / Gephi / networkx)
+print(g.to_turtle())                 # RDF Turtle (.ttl) for triple stores / SPARQL
 ```
 
 ### Swap the extraction backend
@@ -419,7 +421,43 @@ offline): type or pick a requirement, switch template/backend, and see
 **KPI cards** (round-trip, quality score, elements/coverage, type, EARS,
 obligation, parse time), the **color-tiled requirement** (every character mapped
 to its owning node), the **semantic graph** rendered as an SVG tree, and the
-**element table** — with one-click SVG/JSON/Mermaid/DOT export.
+**element table**.
+
+The page also includes:
+
+* a **"how it works" panel** that explains the currently-selected backend
+  (rules / spaCy / BERT) and template (IREB-Rupp / EARS) and updates live as you
+  switch — so you can see what each configuration actually does;
+* one-click export to **SVG, JSON, Mermaid, DOT** and the **knowledge-graph
+  formats GraphML, Turtle (RDF), and Cypher**;
+* an amber **compound-requirement warning** with per-requirement tabs when a
+  single input contains several "shall" clauses.
+
+## Knowledge graph export
+
+Every graph can be exported as a standards-based knowledge graph for downstream
+tooling — no extra dependencies required (both are built with the standard
+library):
+
+```python
+g.to_graphml()   # GraphML (XML) — open in yEd, Gephi, Cytoscape, networkx
+g.to_turtle()    # RDF Turtle (.ttl) — load into any triple store, query with SPARQL
+g.to_cypher()    # Cypher CREATE statements — import into Neo4j
+```
+
+```bash
+python -m reqgraph parse "The system shall close the valve within 5 seconds." \
+        --format graphml > req.graphml
+python -m reqgraph parse "The system shall close the valve within 5 seconds." \
+        --format turtle  > req.ttl
+```
+
+In Turtle, each element becomes a typed RDF resource (`a rg:SUBJECT`, `a
+rg:MODALITY`, …) carrying its text as `rdfs:label`/`rg:text` plus its attributes
+(obligation, function type, condition kind), and relationships become predicates
+(`rg:HAS_MODALITY`, `rg:ACTS_ON`, …). GraphML carries the same role/text/attrs on
+nodes and the relationship type on edges. `GLUE` separator nodes are omitted by
+default (pass `show_glue=True` to include them).
 
 ## Command line
 
@@ -446,7 +484,7 @@ A ready-to-use tagger trained on the 30-requirement seed corpus
 
 ```
 reqgraph/
-  core.py        graph model + exporters (JSON/Mermaid/DOT/Cypher/networkx)
+  core.py        graph model + exporters (JSON/Mermaid/DOT/Cypher/GraphML/Turtle/networkx)
   templates.py   Template + RUPP + EARS + register_template
   tiling.py      tile_to_graph()  — the lossless engine
   parser.py      RequirementParser + build_requirement

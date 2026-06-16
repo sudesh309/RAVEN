@@ -89,6 +89,10 @@ def cmd_parse(args):
             print(g.to_dot())
         elif fmt == "cypher":
             print(g.to_cypher())
+        elif fmt == "graphml":
+            print(g.to_graphml())
+        elif fmt == "turtle":
+            print(g.to_turtle())
         elif fmt == "elements":
             for n in g.elements():
                 print(f"{n.role.value:<11}\t{n.text.strip()}")
@@ -212,7 +216,8 @@ def main(argv=None):
     pp.add_argument("--backend", default="rules", choices=["rules", "spacy", "bert"])
     pp.add_argument("--model", help="saved tagger dir (for --backend bert)")
     pp.add_argument("--format", default="summary",
-                    choices=["summary", "json", "mermaid", "dot", "cypher", "elements"])
+                    choices=["summary", "json", "mermaid", "dot", "cypher",
+                             "graphml", "turtle", "elements"])
     pp.add_argument("--analyze", action="store_true", help="add quality/type/EARS")
     pp.add_argument("--id", help="requirement id metadata")
     pp.add_argument("--no-split", action="store_true",
