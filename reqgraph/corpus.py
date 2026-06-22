@@ -45,12 +45,13 @@ _STOPWORDS = frozenset({
 
 
 def _normalise_items(items):
-    """Accept ['text', ...] or [(id, text), ...]; yield (id, text)."""
+    """Accept str, (id, text) or (id, text, meta); yield (id, text, meta_dict)."""
     for it in items:
         if isinstance(it, (tuple, list)):
-            yield (it[0], it[1])
+            meta = it[2] if len(it) >= 3 and isinstance(it[2], dict) else {}
+            yield (it[0], it[1], meta)
         else:
-            yield (None, it)
+            yield (None, it, {})
 
 
 def _normalise_text(s: str) -> str:
@@ -96,11 +97,12 @@ class RequirementSetGraph:
     """Per-requirement graphs plus the cross-requirement connections between them."""
 
     def __init__(self, req_ids: list, texts: dict, graphs: dict,
-                connections: list):
+                connections: list, metadata: dict = None):
         self.req_ids = req_ids
         self.texts = texts
         self.graphs = graphs
         self.connections = connections
+        self.metadata = metadata or {}   # {req_id: {col: val, ...}}
 
     def _index(self) -> dict:
         return {rid: i for i, rid in enumerate(self.req_ids)}
@@ -120,7 +122,10 @@ class RequirementSetGraph:
 
     def to_dict(self) -> dict:
         return {
-            "requirements": [{"id": rid, "text": self.texts[rid]} for rid in self.req_ids],
+            "requirements": [
+                {"id": rid, "text": self.texts[rid], **self.metadata.get(rid, {})}
+                for rid in self.req_ids
+            ],
             "connections": [
                 {"req_a": c.a.req_id, "req_b": c.b.req_id, "role": c.role.value,
                  "score": round(c.score, 4), "text_a": c.a.text, "text_b": c.b.text}
@@ -211,6 +216,102 @@ class RequirementSetGraph:
                 f"CREATE (a)-[:{rel} {{score: {c.score:.4f}}}]->(b)")
         return "\n".join(stmts)
 
+    def to_element_graphml(self, analyze: bool = True,
+                           similarity_roles: tuple = (Role.SUBJECT, Role.OBJECT)) -> str:
+        """Consolidated element-level GraphML.
+
+        Produces a single graph containing:
+        - REQ nodes (one per requirement) with quality attributes and metadata
+        - ELEMENT nodes (one per semantic element, namespaced {req_id}__{node_id})
+        - HAS_ELEMENT edges from each REQ node to its element nodes
+        - SIMILAR_* edges between element nodes from different requirements
+
+        This gives a visualizable graph (in Gephi/yEd/Cytoscape) showing all
+        connected objects and subjects across the requirement set.
+        """
+        from .quality import enrich as _enrich
+
+        ns = "http://graphml.graphdrawing.org/xmlns"
+        lines = [
+            '<?xml version="1.0" encoding="UTF-8"?>',
+            f'<graphml xmlns="{ns}">',
+            '  <key id="node_type"    for="node" attr.name="node_type"    attr.type="string"/>',
+            '  <key id="role"         for="node" attr.name="role"         attr.type="string"/>',
+            '  <key id="text"         for="node" attr.name="text"         attr.type="string"/>',
+            '  <key id="req_type"     for="node" attr.name="req_type"     attr.type="string"/>',
+            '  <key id="ears_pattern" for="node" attr.name="ears_pattern" attr.type="string"/>',
+            '  <key id="weak_words"   for="node" attr.name="weak_words"   attr.type="string"/>',
+            '  <key id="non_atomic"   for="node" attr.name="non_atomic"   attr.type="string"/>',
+            '  <key id="metadata"     for="node" attr.name="metadata"     attr.type="string"/>',
+            '  <key id="rel"          for="edge" attr.name="rel"          attr.type="string"/>',
+            '  <key id="score"        for="edge" attr.name="score"        attr.type="double"/>',
+            '  <graph id="element-level" edgedefault="directed">',
+        ]
+
+        edge_counter = 0
+
+        for rid in self.req_ids:
+            g = self.graphs[rid]
+            if analyze and not g.analysis:
+                _enrich(g)
+
+            q = g.analysis.get("quality", {})
+            meta_dict = self.metadata.get(rid, {})
+            meta_json = json.dumps(meta_dict, ensure_ascii=False) if meta_dict else ""
+
+            # REQ node
+            rid_esc = _xml_escape(rid)
+            lines.append(f'    <node id="{rid_esc}">')
+            lines.append(f'      <data key="node_type">REQ</data>')
+            lines.append(f'      <data key="text">{_xml_escape(self.texts[rid].strip())}</data>')
+            lines.append(f'      <data key="req_type">{_xml_escape(g.analysis.get("type", ""))}</data>')
+            lines.append(f'      <data key="ears_pattern">{_xml_escape(g.analysis.get("ears_pattern", ""))}</data>')
+            ww = ", ".join(q.get("weak_words", []))
+            lines.append(f'      <data key="weak_words">{_xml_escape(ww)}</data>')
+            lines.append(f'      <data key="non_atomic">{"true" if q.get("non_atomic") else "false"}</data>')
+            if meta_json:
+                lines.append(f'      <data key="metadata">{_xml_escape(meta_json)}</data>')
+            lines.append('    </node>')
+
+            # ELEMENT nodes + HAS_ELEMENT edges
+            for n in g.elements():
+                if n.role.value == "GLUE":
+                    continue
+                elem_id = f"{rid}__{n.id}"
+                elem_esc = _xml_escape(elem_id)
+                lines.append(f'    <node id="{elem_esc}">')
+                lines.append(f'      <data key="node_type">ELEMENT</data>')
+                lines.append(f'      <data key="role">{_xml_escape(n.role.value)}</data>')
+                lines.append(f'      <data key="text">{_xml_escape(n.text.strip())}</data>')
+                lines.append('    </node>')
+                lines.append(f'    <edge id="e{edge_counter}" '
+                             f'source="{rid_esc}" target="{elem_esc}">')
+                lines.append(f'      <data key="rel">HAS_ELEMENT</data>')
+                lines.append('    </edge>')
+                edge_counter += 1
+
+        # SIMILAR_* cross-requirement edges between ELEMENT nodes
+        seen_pairs: set = set()
+        for c in self.connections:
+            if c.role not in similarity_roles:
+                continue
+            src = _xml_escape(f"{c.a.req_id}__{c.a.node_id}")
+            tgt = _xml_escape(f"{c.b.req_id}__{c.b.node_id}")
+            pair_key = (src, tgt, c.role.value)
+            if pair_key in seen_pairs:
+                continue
+            seen_pairs.add(pair_key)
+            rel_label = f"SIMILAR_{c.role.value}"
+            lines.append(f'    <edge id="e{edge_counter}" source="{src}" target="{tgt}">')
+            lines.append(f'      <data key="rel">{rel_label}</data>')
+            lines.append(f'      <data key="score">{c.score:.4f}</data>')
+            lines.append('    </edge>')
+            edge_counter += 1
+
+        lines.append('  </graph>')
+        lines.append('</graphml>')
+        return "\n".join(lines)
+
 
 def _score_fn(elements: list, similarity: str, embedding_model: str):
     if similarity == "embedding":
@@ -231,20 +332,22 @@ def build_requirement_set_graph(
     """Parse a requirement set and connect requirements that share similar
     SUBJECT/OBJECT (or other) elements.
 
-    ``items`` accepts the same shapes as ``io_formats``: ``["text", ...]`` or
-    ``[(id, text), ...]``. Each item is split into its own atomic
-    requirements first (a compound "...shall X and ...shall Y" row becomes
-    two), so a "set" can be either one-requirement-per-row or free text.
+    ``items`` accepts strings, (id, text) tuples, or (id, text, metadata_dict)
+    triples (as returned by the io_formats readers). Each item is split into
+    its own atomic requirements first (a compound "...shall X and ...shall Y"
+    row becomes two), so a "set" can be either one-requirement-per-row or free
+    text.
 
     Returns a :class:`RequirementSetGraph` with one entry per resulting
     requirement plus the discovered cross-requirement ``connections``.
     """
     parser = RequirementParser(template, extractor)
     req_ids, texts, graphs = [], {}, {}
+    metadata: dict = {}
     elements: list[ElementRef] = []
 
     counter = 0
-    for rid, text in _normalise_items(items):
+    for rid, text, item_meta in _normalise_items(items):
         counter += 1
         base = rid or f"REQ-{counter}"
         segments = parser.split(text)
@@ -253,10 +356,11 @@ def build_requirement_set_graph(
             display_id = f"{base}-{i}" if multi else base
             while display_id in graphs:                 # keep ids unique
                 display_id = f"{display_id}*"
-            g = parser.parse(seg, metadata={"id": display_id})
+            g = parser.parse(seg, metadata={"id": display_id, **item_meta})
             req_ids.append(display_id)
             texts[display_id] = seg
             graphs[display_id] = g
+            metadata[display_id] = item_meta
             for n in g.elements():
                 if n.role in roles:
                     elements.append(ElementRef(display_id, n.id, n.role, n.text.strip()))
@@ -273,4 +377,4 @@ def build_requirement_set_graph(
                 connections.append(Connection(a, b, a.role, s))
     connections.sort(key=lambda c: -c.score)
 
-    return RequirementSetGraph(req_ids, texts, graphs, connections)
+    return RequirementSetGraph(req_ids, texts, graphs, connections, metadata)

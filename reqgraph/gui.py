@@ -17,21 +17,32 @@ POST /api/connections  {texts: [...], template?, backend?, similarity?, threshol
                       {requirements, connections, mermaid, dot, graphml, turtle,
                        cypher, error?} -- cross-requirement SUBJECT/OBJECT matches
                       across a requirement *set*, see reqgraph.corpus
+POST /api/export      {format, content, encoding?, template?, backend?,
+                       similarity?, threshold?, roles?} ->
+                      {requirements, connections, n_requirements, n_connections,
+                       mermaid, dot, graphml, turtle, cypher, csv_data, error?}
+                      -- import a file (CSV/Excel/JSON/ReqIF), run quality analysis
+                      + cross-requirement connection detection, return all outputs.
+                      ``content`` is the raw file text (UTF-8) or base64 for binary
+                      Excel files. ``format`` is one of csv/json/reqif/excel.
 
 Design notes
 ------------
 * Binds to 127.0.0.1 only -- this is a personal desktop tool, never exposed.
 * Extractors are created lazily once and cached behind a lock (BERT/spaCy
   loads are expensive; ThreadingHTTPServer handles requests concurrently).
-* ``parse_request`` is a pure function so the API logic is unit-testable
-  without sockets.
+* Pure functions (parse_request, connections_request, export_request) are
+  unit-testable without sockets.
 """
 
 from __future__ import annotations
 
+import base64
+import io
 import json
 import logging
 import os
+import tempfile
 import threading
 import time
 import webbrowser
@@ -299,6 +310,119 @@ def connections_request(state: GuiState, payload: dict) -> dict:
     }
 
 
+def export_request(state: GuiState, payload: dict) -> dict:
+    """Handle one /api/export payload.
+
+    Accepts a file's raw text (or base64 for binary Excel), parses it with the
+    selected backend, runs quality enrichment and cross-requirement connection
+    detection, and returns the full analysis plus download-ready blobs
+    (csv_data string, graphml string, etc.).
+    """
+    from .io_formats import (read_requirements_csv, read_requirements_excel,
+                             read_requirements_json, read_reqif,
+                             requirements_to_dataframe)
+
+    content = payload.get("content", "")
+    fmt = (payload.get("format") or "").lower().strip()
+    encoding = (payload.get("encoding") or "utf-8").lower().strip()
+
+    if not content or not str(content).strip():
+        raise ReqGraphError("please provide file content")
+
+    # write content to a temp file so the existing readers can parse it
+    ext_map = {"csv": ".csv", "excel": ".xlsx", "xlsx": ".xlsx", "xls": ".xls",
+               "json": ".json", "reqif": ".reqif", "xml": ".reqif"}
+    suffix = ext_map.get(fmt, ".csv")
+
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp_path = tmp.name
+        if encoding == "base64":
+            # strip data-URL prefix if present (e.g. data:application/...;base64,)
+            raw = content
+            if "," in raw:
+                raw = raw.split(",", 1)[1]
+            tmp.write(base64.b64decode(raw))
+        else:
+            tmp.write(content.encode("utf-8"))
+
+    try:
+        if suffix in (".xlsx", ".xls"):
+            items = read_requirements_excel(tmp_path)
+        elif suffix == ".json":
+            items = read_requirements_json(tmp_path)
+        elif suffix == ".reqif":
+            items = read_reqif(tmp_path)
+        else:
+            items = read_requirements_csv(tmp_path)
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+    if not items:
+        raise ReqGraphError("no requirements found in the uploaded file")
+
+    template = TEMPLATES.get(payload.get("template", ""), RUPP_TEMPLATE)
+    backend = payload.get("backend", "rules")
+    similarity = payload.get("similarity", "lexical")
+    threshold = float(payload.get("threshold", 0.6))
+    role_names = payload.get("roles") or ["SUBJECT", "OBJECT"]
+    try:
+        roles = tuple(Role(r) for r in role_names)
+    except ValueError as exc:
+        raise ReqGraphError(f"unknown role: {exc}") from exc
+
+    rsg = build_requirement_set_graph(
+        items, template=template, extractor=state.extractor(backend),
+        roles=roles, threshold=threshold, similarity=similarity)
+
+    for rid in rsg.req_ids:
+        enrich(rsg.graphs[rid])
+
+    df = requirements_to_dataframe(items, template=template,
+                                   extractor=state.extractor(backend))
+
+    # build per-requirement quality rows for the GUI table
+    req_rows = []
+    for rid in rsg.req_ids:
+        g = rsg.graphs[rid]
+        q = g.analysis.get("quality", {})
+        row = {"id": rid, "text": rsg.texts[rid], **rsg.metadata.get(rid, {}),
+               "type": g.analysis.get("type", ""),
+               "ears_pattern": g.analysis.get("ears_pattern", ""),
+               "weak_words": ", ".join(q.get("weak_words", [])),
+               "non_atomic": bool(q.get("non_atomic", False))}
+        # add element decomposition
+        bucket = {}
+        for n in g.elements():
+            bucket.setdefault(n.role.value.lower(), []).append(n.text.strip())
+        for role_key in ("subject", "object", "condition", "process", "constraint"):
+            row[role_key] = " | ".join(bucket.get(role_key, []))
+        req_rows.append(row)
+
+    return {
+        "requirements": req_rows,
+        "connections": [
+            {"req_a": c.a.req_id, "req_b": c.b.req_id, "role": c.role.value,
+             "score": round(c.score, 4), "text_a": c.a.text, "text_b": c.b.text}
+            for c in rsg._dedup_pairs()
+        ],
+        "n_requirements": len(rsg.req_ids),
+        "n_connections": len(rsg.connections),
+        "mermaid": rsg.to_mermaid(),
+        "dot": rsg.to_dot(),
+        "graphml": rsg.to_element_graphml(),
+        "turtle": rsg.to_turtle(),
+        "cypher": rsg.to_cypher(),
+        "csv_data": df.to_csv(index=False),
+        "template": template.name,
+        "backend": backend,
+        "similarity": similarity,
+        "threshold": threshold,
+    }
+
+
 # ---------------------------------------------------------------------------
 # HTTP plumbing
 # ---------------------------------------------------------------------------
@@ -341,7 +465,7 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_error(404)
 
     def do_POST(self):
-        if self.path not in ("/api/parse", "/api/connections"):
+        if self.path not in ("/api/parse", "/api/connections", "/api/export"):
             self.send_error(404)
             return
         try:
@@ -349,12 +473,14 @@ class _Handler(BaseHTTPRequestHandler):
             payload = json.loads(self.rfile.read(length) or b"{}")
             if self.path == "/api/parse":
                 self._send_json(parse_request(self.state, payload))
-            else:
+            elif self.path == "/api/connections":
                 self._send_json(connections_request(self.state, payload))
+            else:
+                self._send_json(export_request(self.state, payload))
         except ReqGraphError as exc:
             self._send_json({"error": str(exc)}, status=400)
         except Exception as exc:  # never leak a traceback to the page
-            logger.exception("gui parse failed")
+            logger.exception("gui export failed")
             self._send_json({"error": f"internal error: {exc}"}, status=500)
 
 

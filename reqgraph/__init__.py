@@ -32,6 +32,7 @@ from .extractors import (Extractor, RuleExtractor, SpacyExtractor,
                          BertTaggerExtractor, auto_select, get_extractor)
 from .corpus import (Connection, ElementRef, RequirementSetGraph,
                      build_requirement_set_graph)
+from .io_formats import (read_requirements_json,)
 
 # library logging etiquette: emit nothing unless the application configures it
 _logging.getLogger(__name__).addHandler(_logging.NullHandler())
@@ -43,6 +44,7 @@ __all__ = [
     "Extractor", "RuleExtractor", "SpacyExtractor", "BertTaggerExtractor",
     "auto_select", "get_extractor",
     "Connection", "ElementRef", "RequirementSetGraph", "build_requirement_set_graph",
+    "read_requirements_json",
     "ReqGraphError", "GraphIntegrityError", "ExtractionError",
     "TemplateError", "DataFormatError", "ModelError",
 ]
