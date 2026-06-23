@@ -470,6 +470,39 @@ write_reqif(items, "reqs.reqif")   # OMG ReqIF (DOORS/Polarion-friendly subset)
 read_reqif("reqs.reqif")
 ```
 
+All readers — `read_requirements_csv`, `read_requirements_excel`,
+`read_requirements_json`, `read_reqif` — return `(id, text, metadata)` triples.
+Any extra columns/attributes (e.g. **rationale**, **applicability**, **additional
+info**) are captured into `metadata` with normalised names (lowercased,
+spaces/hyphens → underscores). A source column whose name collides with a parser
+output column (e.g. a `Subject` or `Type` attribute) is preserved under an
+`attr_` prefix so no data is lost.
+
+```python
+from reqgraph.io_formats import read_requirements_json
+items = read_requirements_json("reqs.json")   # [{"id","text","rationale",...}] or {"R1": {...}}
+# items -> [("R1", "The system shall ...", {"rationale": "...", "applicability": "..."}), ...]
+```
+
+### One-shot export: CSV + JSON + consolidated GraphML
+
+`reqgraph export` reads any supported format, runs the parser, quality analysis,
+**and** cross-requirement connection detection, then writes a quality table
+(CSV/JSON) plus a single **element-level GraphML** in one pass. Compound rows are
+split into atomic requirements consistently across every output.
+
+```bash
+python -m reqgraph export reqs.csv  --out-prefix build/out      # → out.csv, out.json, out.graphml
+python -m reqgraph export reqs.json --csv q.csv --graphml g.xml  # pick individual outputs
+python -m reqgraph export reqs.reqif --out-prefix out/ --threshold 0.5
+```
+
+The consolidated GraphML (`RequirementSetGraph.to_element_graphml()`) is one graph
+containing **REQ** nodes (with quality attributes + metadata), **ELEMENT** nodes
+for every SUBJECT/OBJECT/CONDITION/… span (`HAS_ELEMENT` edges), and `SIMILAR_*`
+cross-requirement edges weighted by similarity — so tools like Gephi / yEd /
+Cytoscape show all connected subjects and objects across the whole set.
+
 ## GUI
 
 ```bash
@@ -496,6 +529,10 @@ The page also includes:
   (one per line) and see a network graph connecting requirements that share
   similar SUBJECT/OBJECT elements, with the same knowledge-graph export
   buttons.
+* an **"Import & analyze"** panel: upload a CSV / Excel / JSON / ReqIF file (or
+  paste raw text), and get the per-requirement quality table (auto-discovering
+  any extra metadata columns), the cross-requirement connections network, and
+  one-click downloads of the CSV, JSON, and consolidated element-level GraphML.
 
 ## Knowledge graph export
 

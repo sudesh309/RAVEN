@@ -245,7 +245,6 @@ def cmd_analyze(args):
 def cmd_export(args):
     """Parse + quality analysis + connections → CSV, JSON, consolidated GraphML."""
     from .corpus import build_requirement_set_graph
-    from .io_formats import requirements_to_dataframe
 
     items = _read_items(args.infile)
     if not items:
@@ -275,12 +274,10 @@ def cmd_export(args):
         threshold=args.threshold, similarity=args.similarity,
         embedding_model=args.embedding_model)
 
-    # quality enrichment (build_requirement_set_graph doesn't call enrich)
-    for rid in rsg.req_ids:
-        enrich(rsg.graphs[rid])
-
-    # flat quality + metadata table
-    df = requirements_to_dataframe(items, template=template, extractor=ex)
+    # flat quality + metadata table, derived from the already-parsed (and
+    # compound-split) graphs so the CSV/JSON row set matches the GraphML.
+    # Built lazily so a GraphML-only export needs no pandas.
+    df = rsg.to_dataframe() if (csv_path or json_path) else None
 
     written = []
     if csv_path:

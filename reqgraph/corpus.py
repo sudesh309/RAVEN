@@ -312,6 +312,51 @@ class RequirementSetGraph:
         lines.append('</graphml>')
         return "\n".join(lines)
 
+    def to_dataframe(self, analyze: bool = True):
+        """Flat quality table aligned with the (split) requirements in this set.
+
+        One row per requirement -- compound items are already split into atomic
+        ones by :func:`build_requirement_set_graph`, so the row count matches the
+        GraphML / connection exports. Reuses the already-parsed graphs instead of
+        re-parsing, keeping CSV/JSON output consistent with the graph views.
+
+        Column order mirrors :func:`reqgraph.io_formats.requirements_to_dataframe`:
+        ``id, text, <metadata...>, type, ears_pattern, roundtrip_ok, error,
+        <elements...>, weak_words, non_atomic``.
+        """
+        import pandas as pd
+
+        from .io_formats import _ELEMENT_COLUMNS, _resolve_meta_columns
+        from .quality import enrich as _enrich
+
+        meta_cols = _resolve_meta_columns(
+            k for rid in self.req_ids for k in self.metadata.get(rid, {}))
+
+        rows = []
+        for rid in self.req_ids:
+            g = self.graphs[rid]
+            if analyze and not g.analysis:
+                _enrich(g)
+            text = self.texts[rid]
+            meta = self.metadata.get(rid, {})
+            row = {"id": rid, "text": text}
+            for k, col in meta_cols.items():
+                row[col] = meta.get(k, "")
+            bucket: dict = {}
+            for n in g.elements():
+                bucket.setdefault(n.role.value, []).append(n.text.strip())
+            q = g.analysis.get("quality", {})
+            row.update({"type": g.analysis.get("type"),
+                        "ears_pattern": g.analysis.get("ears_pattern"),
+                        "roundtrip_ok": g.generate() == text,
+                        "error": ""})
+            for r in _ELEMENT_COLUMNS:
+                row[r.value.lower()] = " | ".join(bucket.get(r.value, []))
+            row["weak_words"] = ", ".join(q.get("weak_words", []))
+            row["non_atomic"] = q.get("non_atomic", "")
+            rows.append(row)
+        return pd.DataFrame(rows)
+
 
 def _score_fn(elements: list, similarity: str, embedding_model: str):
     if similarity == "embedding":

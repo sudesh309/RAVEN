@@ -35,12 +35,33 @@ logger = logging.getLogger(__name__)
 _ELEMENT_COLUMNS = [Role.CONDITION, Role.SUBJECT, Role.MODALITY, Role.ACTOR,
                     Role.PROCESS, Role.OBJECT, Role.CONSTRAINT]
 
+# Output columns produced by the parser/quality analysis. A metadata column
+# whose normalised name collides with one of these would otherwise be clobbered,
+# so it is namespaced with an ``attr_`` prefix (see _resolve_meta_columns).
+_RESERVED_COLUMNS = ({"id", "text", "type", "ears_pattern", "roundtrip_ok",
+                      "error", "weak_words", "non_atomic"}
+                     | {r.value.lower() for r in _ELEMENT_COLUMNS})
+
 _COL_NORM_RE = re.compile(r"[\s\-]+")
 
 
 def _col_norm(name: str) -> str:
     """Normalise a column name: lowercase, spaces/hyphens → underscore."""
     return _COL_NORM_RE.sub("_", name.strip().lower())
+
+
+def _resolve_meta_columns(meta_keys) -> dict:
+    """Map metadata keys → output column names, namespacing reserved collisions.
+
+    A source attribute called e.g. "Subject" or "Type" would collide with the
+    parsed SUBJECT element / computed requirement type column; such keys are
+    emitted as ``attr_subject`` / ``attr_type`` so no user data is lost. Order
+    is preserved.
+    """
+    out = {}
+    for k in dict.fromkeys(meta_keys):
+        out[k] = f"attr_{k}" if k in _RESERVED_COLUMNS else k
+    return out
 
 
 def _normalise(items):
@@ -72,13 +93,14 @@ def requirements_to_dataframe(items: Iterable, template: Template = RUPP_TEMPLAT
     # materialise once so we can scan meta keys and iterate again
     item_list = list(items)
 
-    # discover all extra metadata keys in insertion order
-    all_meta_keys = list(dict.fromkeys(
+    # discover all extra metadata keys in insertion order, resolving collisions
+    # with reserved output columns (e.g. a "Subject" attribute → attr_subject)
+    meta_cols = _resolve_meta_columns(
         k
         for it in item_list
         if isinstance(it, (tuple, list)) and len(it) >= 3 and isinstance(it[2], dict)
         for k in it[2]
-    ))
+    )
 
     parser = RequirementParser(template, extractor)
     rows = []
@@ -91,8 +113,8 @@ def requirements_to_dataframe(items: Iterable, template: Template = RUPP_TEMPLAT
 
         row = {"id": rid, "text": text}
         # inject extra metadata columns before quality columns
-        for k in all_meta_keys:
-            row[k] = meta.get(k, "")
+        for k, col in meta_cols.items():
+            row[col] = meta.get(k, "")
         row.update({"type": None, "ears_pattern": None,
                     "roundtrip_ok": False, "error": ""})
         for r in _ELEMENT_COLUMNS:

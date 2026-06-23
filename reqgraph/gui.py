@@ -319,8 +319,7 @@ def export_request(state: GuiState, payload: dict) -> dict:
     (csv_data string, graphml string, etc.).
     """
     from .io_formats import (read_requirements_csv, read_requirements_excel,
-                             read_requirements_json, read_reqif,
-                             requirements_to_dataframe)
+                             read_requirements_json, read_reqif)
 
     content = payload.get("content", "")
     fmt = (payload.get("format") or "").lower().strip()
@@ -377,11 +376,8 @@ def export_request(state: GuiState, payload: dict) -> dict:
         items, template=template, extractor=state.extractor(backend),
         roles=roles, threshold=threshold, similarity=similarity)
 
-    for rid in rsg.req_ids:
-        enrich(rsg.graphs[rid])
-
-    df = requirements_to_dataframe(items, template=template,
-                                   extractor=state.extractor(backend))
+    # split-aware quality table (matches the GraphML's split requirement set)
+    df = rsg.to_dataframe()
 
     # build per-requirement quality rows for the GUI table
     req_rows = []

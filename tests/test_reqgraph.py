@@ -718,6 +718,21 @@ def test_requirements_to_dataframe_includes_metadata_columns():
     assert df.iloc[1]["applicability"] == ""   # missing → empty string
 
 
+def test_metadata_column_collision_is_namespaced():
+    """A source attribute colliding with a reserved/parsed column (e.g. a
+    "Subject" or "Type" attribute) must be preserved under an attr_ prefix
+    rather than clobbered by the parser output (regression)."""
+    from reqgraph.io_formats import requirements_to_dataframe
+    items = [("R1", "The system shall log errors.",
+              {"subject": "USER-VALUE", "type": "mandatory", "rationale": "audit"})]
+    df = requirements_to_dataframe(items)
+    assert df.iloc[0]["attr_subject"] == "USER-VALUE"
+    assert df.iloc[0]["attr_type"] == "mandatory"
+    assert df.iloc[0]["rationale"] == "audit"        # non-colliding key unchanged
+    assert df.iloc[0]["subject"] == "The system"     # parsed element preserved
+    assert df.iloc[0]["type"] == "functional"        # computed type preserved
+
+
 def test_requirement_set_graph_stores_metadata():
     from reqgraph.corpus import build_requirement_set_graph
     items = [
@@ -846,6 +861,32 @@ def test_cli_export_json_input(tmp_path):
     rc = main(["export", str(json_in), "--csv", str(tmp_path / "out.csv")])
     assert rc == 0
     assert (tmp_path / "out.csv").exists()
+
+
+def test_cli_export_splits_compound_consistently(tmp_path):
+    """A compound row must split the same way in CSV, JSON and GraphML so the
+    three outputs describe the same requirement set (regression)."""
+    import json as _json
+    import xml.dom.minidom
+    pandas = pytest.importorskip("pandas")
+    from reqgraph.__main__ import main
+    csv_in = tmp_path / "in.csv"
+    csv_in.write_text(
+        "id,text,rationale\n"
+        "R1,The system shall open the valve and the controller shall log it.,split me\n",
+        encoding="utf-8")
+    prefix = str(tmp_path / "out")
+    rc = main(["export", str(csv_in), "--out-prefix", prefix])
+    assert rc == 0
+    df = pandas.read_csv(str(tmp_path / "out.csv"))
+    # compound R1 -> R1-1, R1-2 in every output
+    assert list(df["id"]) == ["R1-1", "R1-2"]
+    assert (df["rationale"] == "split me").all()    # metadata copied to both halves
+    rows = _json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+    assert [r["id"] for r in rows] == ["R1-1", "R1-2"]
+    gml = (tmp_path / "out.graphml").read_text(encoding="utf-8")
+    xml.dom.minidom.parseString(gml.encode("utf-8"))
+    assert 'id="R1-1"' in gml and 'id="R1-2"' in gml
 
 
 # --- GUI export_request ------------------------------------------------------
