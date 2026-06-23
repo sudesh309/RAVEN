@@ -43,7 +43,7 @@ def _build_parser(template_name, backend, model):
 
 def _read_items(path):
     from .io_formats import (read_reqif, read_requirements_csv,
-                             read_requirements_excel)
+                             read_requirements_excel, read_requirements_json)
     ext = os.path.splitext(path)[1].lower()
     if ext == ".csv":
         return read_requirements_csv(path)
@@ -51,6 +51,8 @@ def _read_items(path):
         return read_requirements_excel(path)
     if ext in (".reqif", ".xml"):
         return read_reqif(path)
+    if ext == ".json":
+        return read_requirements_json(path)
     sys.exit(f"error: unsupported input extension {ext!r}")
 
 
@@ -210,13 +212,13 @@ def cmd_connections(args):
 
 def cmd_analyze(args):
     items = _read_items(args.infile)
-    texts = [t for _id, t in items]
+    texts = [t for _id, t, *_ in items]
     print(f"loaded {len(texts)} requirements from {args.infile}\n")
 
     # per-requirement quality / type / EARS
     p = RequirementParser(RUPP_TEMPLATE)
     print("== quality / type / EARS ==")
-    for (rid, text) in items:
+    for (rid, text, *_) in items:
         g = enrich(p.parse(text))
         q = g.analysis["quality"]
         smells = [k for k, v in q.items() if v and k != "weak_words"]
@@ -237,6 +239,65 @@ def cmd_analyze(args):
             print(f"  [{i}] <> [{j}]  {s:.3f}")
     except Exception as e:
         print("\n(embedding analysis skipped:", e, ")")
+    return 0
+
+
+def cmd_export(args):
+    """Parse + quality analysis + connections → CSV, JSON, consolidated GraphML."""
+    from .corpus import build_requirement_set_graph
+    from .io_formats import requirements_to_dataframe
+
+    items = _read_items(args.infile)
+    if not items:
+        sys.exit("error: no requirements found in input file")
+
+    ex = None
+    if args.backend == "spacy":
+        ex = SpacyExtractor()
+    elif args.backend == "bert":
+        if not args.model:
+            sys.exit("error: --backend bert requires --model")
+        ex = BertTaggerExtractor(model_dir=args.model)
+    template = TEMPLATES.get(args.template, RUPP_TEMPLATE)
+    roles = tuple(Role(r.strip().upper()) for r in args.roles.split(","))
+
+    prefix = args.out_prefix
+    csv_path   = args.csv     or (f"{prefix}.csv"     if prefix else None)
+    json_path  = args.json    or (f"{prefix}.json"    if prefix else None)
+    gml_path   = args.graphml or (f"{prefix}.graphml" if prefix else None)
+
+    if not any([csv_path, json_path, gml_path]):
+        sys.exit("error: specify --out-prefix or at least one of --csv / --json / --graphml")
+
+    # build set graph: parses every requirement and finds cross-req connections
+    rsg = build_requirement_set_graph(
+        items, template=template, extractor=ex, roles=roles,
+        threshold=args.threshold, similarity=args.similarity,
+        embedding_model=args.embedding_model)
+
+    # quality enrichment (build_requirement_set_graph doesn't call enrich)
+    for rid in rsg.req_ids:
+        enrich(rsg.graphs[rid])
+
+    # flat quality + metadata table
+    df = requirements_to_dataframe(items, template=template, extractor=ex)
+
+    written = []
+    if csv_path:
+        df.to_csv(csv_path, index=False)
+        written.append(csv_path)
+    if json_path:
+        df.to_json(json_path, orient="records", indent=2, force_ascii=False)
+        written.append(json_path)
+    if gml_path:
+        with open(gml_path, "w", encoding="utf-8") as fh:
+            fh.write(rsg.to_element_graphml())
+        written.append(gml_path)
+
+    print(f"exported {len(rsg.req_ids)} requirements "
+          f"({len(rsg.connections)} connections found)")
+    for p in written:
+        print(f"  -> {p}")
     return 0
 
 
@@ -297,6 +358,31 @@ def main(argv=None):
     pa.add_argument("--dup-threshold", type=float, default=0.95)
     pa.add_argument("--conflict-threshold", type=float, default=0.9)
     pa.set_defaults(func=cmd_analyze)
+
+    px = sub.add_parser(
+        "export",
+        help="parse + quality + connections → CSV, JSON, consolidated element GraphML")
+    px.add_argument("infile",
+                    help="input file (.csv, .xlsx, .xls, .json, .reqif, .xml)")
+    px.add_argument("--out-prefix", default=None,
+                    help="output path prefix; generates <prefix>.csv, <prefix>.json, "
+                         "<prefix>.graphml (overridden by individual flags)")
+    px.add_argument("--csv",     metavar="PATH", default=None,
+                    help="explicit CSV output path")
+    px.add_argument("--json",    metavar="PATH", default=None,
+                    help="explicit JSON output path")
+    px.add_argument("--graphml", metavar="PATH", default=None,
+                    help="explicit consolidated element GraphML output path")
+    px.add_argument("--template",  default="IREB-Rupp")
+    px.add_argument("--backend",   default="rules", choices=["rules", "spacy", "bert"])
+    px.add_argument("--model",     default=None,
+                    help="saved tagger dir (for --backend bert)")
+    px.add_argument("--roles",     default="SUBJECT,OBJECT",
+                    help="roles for cross-req similarity (default SUBJECT,OBJECT)")
+    px.add_argument("--similarity", default="lexical", choices=["lexical", "embedding"])
+    px.add_argument("--threshold",  type=float, default=0.6)
+    px.add_argument("--embedding-model", default="prajjwal1/bert-tiny")
+    px.set_defaults(func=cmd_export)
 
     pc = sub.add_parser("connections",
                         help="find similar SUBJECT/OBJECT elements across a "

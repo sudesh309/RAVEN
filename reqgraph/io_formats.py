@@ -9,12 +9,20 @@ Batch import / export of requirement sets:
 * ReqIF        (lxml) -- the OMG Requirements Interchange Format used by DOORS,
   Polarion, etc. A minimal, well-formed subset (ID + text) is written/read;
   export->import round-trips the requirement text.
+* JSON         (stdlib json + pandas) -- array-of-objects or dict-keyed shapes.
+
+All readers return 3-tuples ``(id, text, metadata_dict)`` where ``metadata_dict``
+carries any extra columns beyond ``id`` and ``text`` (e.g. rationale,
+applicability, additional_info). Column names are normalised to lowercase with
+spaces/hyphens replaced by underscores. Callers that only need (id, text) can
+unpack as ``for rid, text, *_ in items``.
 """
 
 from __future__ import annotations
 
 import datetime as _dt
 import logging
+import re
 from typing import Iterable, Optional
 
 from .core import Role
@@ -27,9 +35,16 @@ logger = logging.getLogger(__name__)
 _ELEMENT_COLUMNS = [Role.CONDITION, Role.SUBJECT, Role.MODALITY, Role.ACTOR,
                     Role.PROCESS, Role.OBJECT, Role.CONSTRAINT]
 
+_COL_NORM_RE = re.compile(r"[\s\-]+")
+
+
+def _col_norm(name: str) -> str:
+    """Normalise a column name: lowercase, spaces/hyphens → underscore."""
+    return _COL_NORM_RE.sub("_", name.strip().lower())
+
 
 def _normalise(items):
-    """Accept ['text', ...] or [(id, text), ...]; yield (id, text)."""
+    """Accept str, (id, text) or (id, text, meta); yield (id, text)."""
     for it in items:
         if isinstance(it, (tuple, list)):
             yield (it[0], it[1])
@@ -45,16 +60,41 @@ def requirements_to_dataframe(items: Iterable, template: Template = RUPP_TEMPLAT
                               extractor=None, analyze: bool = True):
     """Decompose a requirement set into a flat table.
 
+    Accepts str, (id, text) or (id, text, meta_dict) items. Extra metadata
+    fields (rationale, applicability, etc.) are injected as columns between
+    ``text`` and ``type`` in the output DataFrame.
+
     Fault isolation: a row that fails to parse is recorded with its error
     message instead of aborting the whole batch."""
     import pandas as pd
     from .quality import enrich
 
+    # materialise once so we can scan meta keys and iterate again
+    item_list = list(items)
+
+    # discover all extra metadata keys in insertion order
+    all_meta_keys = list(dict.fromkeys(
+        k
+        for it in item_list
+        if isinstance(it, (tuple, list)) and len(it) >= 3 and isinstance(it[2], dict)
+        for k in it[2]
+    ))
+
     parser = RequirementParser(template, extractor)
     rows = []
-    for rid, text in _normalise(items):
-        row = {"id": rid, "text": text, "type": None, "ears_pattern": None,
-               "roundtrip_ok": False, "error": ""}
+    for it in item_list:
+        if isinstance(it, (tuple, list)):
+            rid, text = it[0], it[1]
+            meta = it[2] if len(it) >= 3 and isinstance(it[2], dict) else {}
+        else:
+            rid, text, meta = None, it, {}
+
+        row = {"id": rid, "text": text}
+        # inject extra metadata columns before quality columns
+        for k in all_meta_keys:
+            row[k] = meta.get(k, "")
+        row.update({"type": None, "ears_pattern": None,
+                    "roundtrip_ok": False, "error": ""})
         for r in _ELEMENT_COLUMNS:
             row[r.value.lower()] = ""
         row["weak_words"] = ""
@@ -103,12 +143,60 @@ def read_requirements_excel(path, text_column="text", id_column="id"):
     return _rows_from_df(df, text_column, id_column)
 
 
+def read_requirements_json(path, text_column="text", id_column="id"):
+    """Read requirements from a JSON file.
+
+    Supports two shapes:
+      - Array of objects:  [{"id": "R1", "text": "...", "rationale": "..."}, ...]
+      - Dict-keyed:        {"R1": {"text": "...", ...}, ...}
+                        or {"R1": "plain text", ...}
+
+    Returns a list of 3-tuples (id, text, metadata_dict).
+    """
+    import json as _json
+    import pandas as pd
+
+    with open(path, encoding="utf-8") as fh:
+        raw = _json.load(fh)
+
+    if isinstance(raw, list):
+        df = pd.DataFrame(raw)
+    elif isinstance(raw, dict):
+        rows = []
+        for key, val in raw.items():
+            if isinstance(val, str):
+                rows.append({id_column: key, text_column: val})
+            elif isinstance(val, dict):
+                row = dict(val)
+                if id_column not in row:
+                    row[id_column] = key
+                rows.append(row)
+            else:
+                raise DataFormatError(
+                    f"JSON dict values must be str or object, got "
+                    f"{type(val).__name__!r} for key {key!r}")
+        df = pd.DataFrame(rows)
+    else:
+        raise DataFormatError(
+            f"JSON root must be an array or object, got {type(raw).__name__!r}")
+
+    return _rows_from_df(df, text_column, id_column)
+
+
 def _rows_from_df(df, text_column, id_column):
+    """Extract rows as 3-tuples (id, text, metadata_dict).
+
+    Extra columns beyond id/text are normalised (lowercase, spaces→underscore)
+    and returned in the metadata dict. NaN values are omitted from the dict.
+    """
     import pandas as pd
     if text_column not in df.columns:
         raise DataFormatError(
             f"text column {text_column!r} not found; available columns: "
             f"{list(df.columns)}")
+    extra_cols = [c for c in df.columns if c not in (text_column, id_column)]
+    norm_map = {c: _col_norm(c) for c in extra_cols}   # original → normalised
+
     items = []
     for _, r in df.iterrows():
         txt = r[text_column]
@@ -117,7 +205,12 @@ def _rows_from_df(df, text_column, id_column):
         rid = r[id_column] if id_column in df.columns else None
         if rid is not None and pd.isna(rid):
             rid = None
-        items.append((None if rid is None else str(rid), str(txt)))
+        meta = {}
+        for orig, norm in norm_map.items():
+            v = r[orig]
+            if not pd.isna(v):
+                meta[norm] = str(v)
+        items.append((None if rid is None else str(rid), str(txt), meta))
     return items
 
 
@@ -198,20 +291,48 @@ def write_reqif(items, path, title="reqgraph export"):
 
 
 def read_reqif(path):
-    """Read (id, text) pairs back from a ReqIF file written by ``write_reqif``."""
+    """Read (id, text, metadata_dict) triples from a ReqIF file.
+
+    Reads ALL ATTRIBUTE-VALUE-STRING elements, not just the standard
+    AD-ID / AD-TEXT pair, so extra attributes (rationale, applicability, etc.)
+    added by tools like DOORS or Polarion are preserved on import.
+    """
     from lxml import etree
 
     tree = etree.parse(path)
+
+    # build ref -> normalised_name map from SPEC-OBJECT-TYPE SPEC-ATTRIBUTES
+    attr_names = {}   # IDENTIFIER -> normalised long-name
+    id_ref = "AD-ID"
+    text_ref = "AD-TEXT"
+
+    for ad in tree.findall(f".//{_q('ATTRIBUTE-DEFINITION-STRING')}"):
+        ident = ad.get("IDENTIFIER", "")
+        long_name = ad.get("LONG-NAME", ident)
+        norm = _col_norm(long_name)
+        attr_names[ident] = norm
+        # detect which ref is the id and which is the text
+        if norm in ("reqid", "id") or ident == "AD-ID":
+            id_ref = ident
+        elif norm in ("reqtext", "text") or ident == "AD-TEXT":
+            text_ref = ident
+
     out = []
     for so in tree.findall(f".//{_q('SPEC-OBJECT')}"):
         rid, text = None, None
+        meta = {}
         for av in so.findall(f".//{_q('ATTRIBUTE-VALUE-STRING')}"):
-            ref = av.find(f".//{_q('ATTRIBUTE-DEFINITION-STRING-REF')}")
-            ref_val = ref.text if ref is not None else ""
-            if ref_val == "AD-ID":
-                rid = av.get("THE-VALUE")
-            elif ref_val == "AD-TEXT":
-                text = av.get("THE-VALUE")
+            ref_el = av.find(f".//{_q('ATTRIBUTE-DEFINITION-STRING-REF')}")
+            ref_val = ref_el.text if ref_el is not None else ""
+            the_value = av.get("THE-VALUE", "")
+            if ref_val == id_ref:
+                rid = the_value
+            elif ref_val == text_ref:
+                text = the_value
+            else:
+                norm_name = attr_names.get(ref_val, _col_norm(ref_val))
+                if norm_name and the_value:
+                    meta[norm_name] = the_value
         if text is not None:
-            out.append((rid, text))
+            out.append((rid, text, meta))
     return out

@@ -282,7 +282,7 @@ def test_reqif_roundtrip():
     with tempfile.TemporaryDirectory() as d:
         path = write_reqif(items, os.path.join(d, "r.reqif"))
         back = read_reqif(path)
-    assert [t for _, t in back] == [t for _, t in items]
+    assert [t for _, t, *_ in back] == [t for _, t in items]
 
 
 def test_csv_roundtrip():
@@ -291,7 +291,7 @@ def test_csv_roundtrip():
     with tempfile.TemporaryDirectory() as d:
         path = write_csv(items, os.path.join(d, "r.csv"))
         back = read_requirements_csv(path)
-    assert [t for _, t in back] == [t for _, t in items]
+    assert [t for _, t, *_ in back] == [t for _, t in items]
 
 
 # --- requirement set: cross-requirement SUBJECT/OBJECT connections ---------
@@ -591,6 +591,287 @@ def test_gui_server_smoke():
             headers={"Content-Type": "application/json"})
         cout = _json.load(urllib.request.urlopen(creq, timeout=10))
         assert cout["n_requirements"] == 4
+        # /api/export with CSV text content (use csv module for proper quoting)
+        import csv as _csv, io as _io
+        buf = _io.StringIO()
+        w = _csv.writer(buf)
+        w.writerow(["id", "text"])
+        for rid, text in SET_REQS:
+            w.writerow([rid, text])
+        csv_content = buf.getvalue()
+        ereq = urllib.request.Request(
+            f"{base}/api/export",
+            data=_json.dumps({"format": "csv", "content": csv_content}).encode(),
+            headers={"Content-Type": "application/json"})
+        eout = _json.load(urllib.request.urlopen(ereq, timeout=10))
+        assert eout["n_requirements"] == 4
+        assert "<graphml" in eout["graphml"]
+        assert "csv_data" in eout
     finally:
         server.shutdown()
         server.server_close()
+
+
+# --- JSON reader + extended attributes -------------------------------------------
+
+def test_read_requirements_json_array_of_objects(tmp_path):
+    import json as _json
+    from reqgraph.io_formats import read_requirements_json
+    data = [
+        {"id": "R1", "text": "The system shall log errors.", "rationale": "audit trail"},
+        {"id": "R2", "text": "The sensor shall measure pressure.", "applicability": "all"},
+    ]
+    p = tmp_path / "reqs.json"
+    p.write_text(_json.dumps(data), encoding="utf-8")
+    items = read_requirements_json(str(p))
+    assert len(items) == 2
+    rid, text, meta = items[0]
+    assert rid == "R1"
+    assert "log errors" in text
+    assert meta["rationale"] == "audit trail"
+    rid2, text2, meta2 = items[1]
+    assert meta2["applicability"] == "all"
+
+
+def test_read_requirements_json_dict_keyed(tmp_path):
+    import json as _json
+    from reqgraph.io_formats import read_requirements_json
+    data = {"R1": {"text": "The valve shall close within 2 seconds.", "applicability": "type A"},
+            "R2": {"text": "The pump shall maintain pressure."}}
+    p = tmp_path / "d.json"
+    p.write_text(_json.dumps(data), encoding="utf-8")
+    items = read_requirements_json(str(p))
+    by_id = {rid: (text, meta) for rid, text, meta in items}
+    assert "valve" in by_id["R1"][0]
+    assert by_id["R1"][1]["applicability"] == "type A"   # key normalised, value preserved
+
+
+def test_read_requirements_json_plain_string_dict(tmp_path):
+    import json as _json
+    from reqgraph.io_formats import read_requirements_json
+    data = {"R1": "The system shall respond.", "R2": "The sensor shall measure."}
+    p = tmp_path / "plain.json"
+    p.write_text(_json.dumps(data), encoding="utf-8")
+    items = read_requirements_json(str(p))
+    assert len(items) == 2
+    rid, text, meta = items[0]
+    assert rid == "R1"
+    assert meta == {}
+
+
+def test_read_requirements_json_bad_shape_raises(tmp_path):
+    from reqgraph import DataFormatError
+    from reqgraph.io_formats import read_requirements_json
+    p = tmp_path / "bad.json"
+    p.write_text('"just a string"', encoding="utf-8")
+    with pytest.raises(DataFormatError):
+        read_requirements_json(str(p))
+
+
+def test_rows_from_df_captures_extra_columns():
+    import pandas as pd
+    from reqgraph.io_formats import _rows_from_df
+    df = pd.DataFrame([
+        {"id": "R1", "text": "The system shall log.", "rationale": "audit", "applicability": "all"},
+    ])
+    items = _rows_from_df(df, "text", "id")
+    rid, text, meta = items[0]
+    assert rid == "R1"
+    assert meta["rationale"] == "audit"
+    assert meta["applicability"] == "all"
+
+
+def test_rows_from_df_normalises_column_names():
+    import pandas as pd
+    from reqgraph.io_formats import _rows_from_df
+    df = pd.DataFrame([{"id": "R1", "text": "x", "Additional Info": "note", "Req-Source": "sys"}])
+    items = _rows_from_df(df, "text", "id")
+    _, _, meta = items[0]
+    assert "additional_info" in meta
+    assert "req_source" in meta
+
+
+def test_read_requirements_csv_with_extra_columns(tmp_path):
+    from reqgraph.io_formats import read_requirements_csv
+    p = tmp_path / "r.csv"
+    p.write_text("id,text,rationale,applicability\n"
+                 "R1,The system shall log.,audit trail,always\n", encoding="utf-8")
+    items = read_requirements_csv(str(p))
+    rid, text, meta = items[0]
+    assert meta["rationale"] == "audit trail"
+    assert meta["applicability"] == "always"
+
+
+def test_requirements_to_dataframe_includes_metadata_columns():
+    from reqgraph.io_formats import requirements_to_dataframe
+    items = [
+        ("R1", "The system shall log errors.", {"rationale": "audit", "applicability": "all"}),
+        ("R2", "The sensor shall measure pressure.", {"rationale": "safety"}),
+    ]
+    df = requirements_to_dataframe(items)
+    cols = list(df.columns)
+    assert "rationale" in cols
+    assert "applicability" in cols
+    # metadata columns must appear before type column
+    assert cols.index("rationale") < cols.index("type")
+    assert df.iloc[0]["rationale"] == "audit"
+    assert df.iloc[1]["applicability"] == ""   # missing → empty string
+
+
+def test_requirement_set_graph_stores_metadata():
+    from reqgraph.corpus import build_requirement_set_graph
+    items = [
+        ("R1", "The flight management system shall calculate the optimal cruise altitude.",
+         {"rationale": "fuel efficiency"}),
+        ("R2", "The flight management system shall log every altitude change.",
+         {"applicability": "all aircraft"}),
+    ]
+    rsg = build_requirement_set_graph(items)
+    assert rsg.metadata["R1"]["rationale"] == "fuel efficiency"
+    assert rsg.metadata["R2"]["applicability"] == "all aircraft"
+
+
+def test_requirement_set_graph_to_dict_includes_metadata():
+    from reqgraph.corpus import build_requirement_set_graph
+    items = [("R1", "The system shall log.", {"rationale": "because"})]
+    rsg = build_requirement_set_graph(items)
+    d = rsg.to_dict()
+    req_entry = d["requirements"][0]
+    assert req_entry["rationale"] == "because"
+
+
+def test_to_element_graphml_is_well_formed_xml():
+    import xml.dom.minidom
+    from reqgraph.corpus import build_requirement_set_graph
+    rsg = build_requirement_set_graph(SET_REQS)
+    gml = rsg.to_element_graphml()
+    xml.dom.minidom.parseString(gml.encode("utf-8"))   # raises if not well-formed
+
+
+def test_to_element_graphml_has_req_and_element_nodes():
+    import xml.etree.ElementTree as ET
+    from reqgraph.corpus import build_requirement_set_graph
+    rsg = build_requirement_set_graph(SET_REQS)
+    gml = rsg.to_element_graphml()
+    root = ET.fromstring(gml)
+    ns = "http://graphml.graphdrawing.org/xmlns"
+    nodes = root.findall(f".//{{{ns}}}node")
+    node_ids = {n.get("id") for n in nodes}
+    # all requirement ids must appear as REQ nodes
+    for rid in rsg.req_ids:
+        assert rid in node_ids
+    # at least one ELEMENT node must exist (double-underscore namespaced)
+    elem_nodes = [n for n in node_ids if "__" in n]
+    assert len(elem_nodes) > 0
+
+
+def test_to_element_graphml_has_similarity_edges():
+    import xml.etree.ElementTree as ET
+    from reqgraph.corpus import build_requirement_set_graph
+    rsg = build_requirement_set_graph(SET_REQS, threshold=0.5)
+    gml = rsg.to_element_graphml()
+    assert "SIMILAR_" in gml   # at least one cross-req similarity edge
+
+
+def test_to_element_graphml_has_has_element_edges():
+    from reqgraph.corpus import build_requirement_set_graph
+    rsg = build_requirement_set_graph(SET_REQS)
+    gml = rsg.to_element_graphml()
+    assert "HAS_ELEMENT" in gml
+
+
+def test_to_element_graphml_metadata_in_req_node():
+    from reqgraph.corpus import build_requirement_set_graph
+    items = [
+        ("R1", "The flight management system shall calculate the optimal cruise altitude.",
+         {"rationale": "fuel efficiency", "applicability": "all aircraft"}),
+        ("R2", "The flight management system shall log every altitude change.",
+         {}),
+    ]
+    rsg = build_requirement_set_graph(items)
+    gml = rsg.to_element_graphml()
+    assert "fuel efficiency" in gml   # metadata JSON appears in graphml
+
+
+# --- CLI export subcommand ---------------------------------------------------
+
+def test_cli_export_csv_json_graphml(tmp_path, capsys):
+    import xml.dom.minidom
+    pandas = pytest.importorskip("pandas")
+    from reqgraph.__main__ import main
+    csv_in = tmp_path / "in.csv"
+    import csv as _csv, io as _io
+    buf = _io.StringIO()
+    w = _csv.writer(buf)
+    w.writerow(["id", "text", "rationale"])
+    for rid, text in SET_REQS:
+        w.writerow([rid, text, f"rationale for {rid}"])
+    csv_in.write_text(buf.getvalue(), encoding="utf-8")
+    prefix = str(tmp_path / "out")
+    rc = main(["export", str(csv_in), "--out-prefix", prefix])
+    assert rc == 0
+    assert (tmp_path / "out.csv").exists()
+    assert (tmp_path / "out.json").exists()
+    assert (tmp_path / "out.graphml").exists()
+    df = pandas.read_csv(str(tmp_path / "out.csv"))
+    assert len(df) == len(SET_REQS)
+    assert "rationale" in df.columns
+    import json as _json
+    rows = _json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+    assert len(rows) == len(SET_REQS)
+    xml.dom.minidom.parse(str(tmp_path / "out.graphml"))
+
+
+def test_cli_export_individual_flags(tmp_path):
+    pandas = pytest.importorskip("pandas")
+    from reqgraph.__main__ import main
+    csv_in = tmp_path / "in.csv"
+    csv_in.write_text("id,text\nR1,The system shall log.\n", encoding="utf-8")
+    rc = main(["export", str(csv_in),
+               "--csv", str(tmp_path / "q.csv"),
+               "--graphml", str(tmp_path / "g.graphml")])
+    assert rc == 0
+    assert (tmp_path / "q.csv").exists()
+    assert (tmp_path / "g.graphml").exists()
+    assert not (tmp_path / "q.json").exists()
+
+
+def test_cli_export_json_input(tmp_path):
+    import json as _json
+    pandas = pytest.importorskip("pandas")
+    from reqgraph.__main__ import main
+    data = [{"id": rid, "text": text} for rid, text in SET_REQS]
+    json_in = tmp_path / "in.json"
+    json_in.write_text(_json.dumps(data), encoding="utf-8")
+    rc = main(["export", str(json_in), "--csv", str(tmp_path / "out.csv")])
+    assert rc == 0
+    assert (tmp_path / "out.csv").exists()
+
+
+# --- GUI export_request ------------------------------------------------------
+
+def test_gui_export_request_payload(tmp_path):
+    import csv as _csv, io as _io
+    from reqgraph.gui import GuiState, export_request
+    buf = _io.StringIO()
+    w = _csv.writer(buf)
+    w.writerow(["id", "text", "rationale"])
+    for rid, text in SET_REQS:
+        w.writerow([rid, text, f"rationale for {rid}"])
+    csv_content = buf.getvalue()
+    d = export_request(GuiState(), {"format": "csv", "content": csv_content})
+    assert d["n_requirements"] == 4
+    assert d["n_connections"] >= 0
+    assert {c["role"] for c in d["connections"]} <= {"SUBJECT", "OBJECT"}
+    assert "<graphml" in d["graphml"]
+    assert "ELEMENT" in d["graphml"]   # element-level, not just requirement-level
+    assert "HAS_ELEMENT" in d["graphml"]
+    assert "csv_data" in d
+    assert "rationale" in d["requirements"][0]   # metadata preserved
+
+
+def test_gui_export_request_rejects_empty():
+    from reqgraph import ReqGraphError
+    from reqgraph.gui import GuiState, export_request
+    with pytest.raises(ReqGraphError):
+        export_request(GuiState(), {"format": "csv", "content": "   "})

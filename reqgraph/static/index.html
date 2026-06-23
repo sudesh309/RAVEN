@@ -98,6 +98,17 @@
   #connwrap{overflow-x:auto}
   .num{font:inherit;border-radius:8px;border:1px solid var(--border);
     padding:7px 8px;width:72px}
+  /* import & analyze */
+  #exp-error{display:none;background:var(--bad-soft);color:var(--bad);
+    border:1px solid #f0c0c0;border-radius:8px;padding:9px 13px;font-size:14px}
+  .tab-btns{display:flex;gap:6px;margin-bottom:10px}
+  .tab-btn{font:inherit;font-size:13px;padding:5px 14px;border-radius:8px;
+    border:1.5px solid var(--border);background:#fff;cursor:pointer;color:var(--muted)}
+  .tab-btn.active{background:var(--accent);border-color:var(--accent);
+    color:#fff;font-weight:600}
+  .tab-btn:hover:not(.active){border-color:var(--accent);color:var(--accent)}
+  #exp-connwrap{overflow-x:auto;margin-bottom:16px}
+  .qty-ok{color:var(--ok)} .qty-bad{color:var(--bad)}
 </style>
 </head>
 <body>
@@ -218,6 +229,74 @@
         <th>Requirement A</th><th style="width:90px">Role</th><th>Match</th>
         <th>Requirement B</th><th style="width:70px">Score</th>
       </tr></thead><tbody id="set-tbody"></tbody></table>
+  </section>
+
+  <!-- ── Import & analyze ───────────────────────────────────────────── -->
+  <section class="card">
+    <h2>Import &amp; analyze requirement set</h2>
+    <div class="hint" style="margin:0 0 10px;display:block">
+      Upload a file (CSV, Excel, JSON, ReqIF) or paste CSV/JSON text.
+      Extra columns like <em>rationale</em>, <em>applicability</em>, <em>additional_info</em>
+      are detected automatically and preserved in all outputs.
+    </div>
+    <div class="tab-btns">
+      <button class="tab-btn active" id="exp-tab-file" onclick="expTab('file')">&#128193; Upload file</button>
+      <button class="tab-btn" id="exp-tab-paste" onclick="expTab('paste')">&#128203; Paste text</button>
+    </div>
+    <div id="exp-file-pane">
+      <input type="file" id="exp-file" accept=".csv,.xlsx,.xls,.json,.reqif,.xml"
+             style="font:inherit;cursor:pointer">
+    </div>
+    <div id="exp-paste-pane" style="display:none">
+      <div class="controls" style="margin-top:0;margin-bottom:6px">
+        <div class="ctl"><label for="exp-format">Format</label>
+          <select id="exp-format">
+            <option value="csv">CSV</option>
+            <option value="json">JSON</option>
+            <option value="reqif">ReqIF (XML)</option>
+          </select></div>
+      </div>
+      <textarea id="exp-text" spellcheck="false" style="min-height:130px"
+        placeholder="Paste CSV (with header row) or JSON array content here..."></textarea>
+    </div>
+    <div class="controls">
+      <div class="ctl"><label for="exp-similarity">Similarity</label>
+        <select id="exp-similarity" title="how elements are compared">
+          <option value="lexical" selected>lexical (no deps)</option>
+          <option value="embedding">BERT embedding</option>
+        </select></div>
+      <div class="ctl"><label for="exp-threshold">Threshold</label>
+        <input id="exp-threshold" class="num" type="number" min="0" max="1" step="0.05" value="0.6"></div>
+      <button class="primary" id="exp-btn" style="align-self:flex-end">Analyze &rarr;</button>
+    </div>
+  </section>
+
+  <div id="exp-error"></div>
+
+  <section class="card" id="exportcard" hidden>
+    <div class="row-head">
+      <h2 style="margin:0">Analysis results</h2>
+      <span class="spacer"></span>
+      <div class="exports">
+        <span class="grp">download</span>
+        <button class="ghost" onclick="dlExport('csv')">CSV</button>
+        <button class="ghost" onclick="dlExport('json')">JSON</button>
+        <span class="sep"></span>
+        <span class="grp">knowledge graph</span>
+        <button class="ghost" onclick="dlExport('graphml')" title="Consolidated element-level GraphML">GraphML</button>
+        <button class="ghost" onclick="dlExport('mermaid')">Mermaid</button>
+        <button class="ghost" onclick="dlExport('turtle')">Turtle</button>
+        <button class="ghost" onclick="dlExport('cypher')">Cypher</button>
+      </div>
+    </div>
+    <div id="exp-summary" style="margin:6px 0 12px;color:var(--muted);font-size:13px"></div>
+    <div id="exp-connwrap"><svg id="exp-conngraph"></svg></div>
+    <div style="overflow-x:auto">
+      <table id="exp-table">
+        <thead id="exp-thead"></thead>
+        <tbody id="exp-tbody"></tbody>
+      </table>
+    </div>
   </section>
 </main>
 
@@ -576,8 +655,193 @@ function dlSet(kind){
   a.download = name; a.click(); URL.revokeObjectURL(a.href);
 }
 
+/* ── Import & analyze ─────────────────────────────────────────────────── */
+let expLast = null;
+
+function expTab(tab){
+  $("exp-file-pane").style.display = tab === "file" ? "" : "none";
+  $("exp-paste-pane").style.display = tab === "paste" ? "" : "none";
+  $("exp-tab-file").className = "tab-btn" + (tab === "file" ? " active" : "");
+  $("exp-tab-paste").className = "tab-btn" + (tab === "paste" ? " active" : "");
+}
+
+function bootExport(){
+  $("exp-btn").onclick = parseExport;
+  $("exp-file").addEventListener("change", () => {
+    if($("exp-file").files.length) parseExport();
+  });
+}
+
+async function parseExport(){
+  showExpError(null);
+  const fileInput = $("exp-file");
+  const pasteVisible = $("exp-paste-pane").style.display !== "none";
+
+  if(pasteVisible){
+    const content = $("exp-text").value.trim();
+    if(!content){ showExpError("please paste some content"); return; }
+    const body = {format: $("exp-format").value, content,
+                  encoding: "utf-8",
+                  similarity: $("exp-similarity").value,
+                  threshold: +$("exp-threshold").value,
+                  template: $("template").value, backend: $("backend").value};
+    await _doExport(body);
+  } else {
+    if(!fileInput.files.length){ showExpError("please choose a file"); return; }
+    const file = fileInput.files[0];
+    const ext = file.name.split(".").pop().toLowerCase();
+    const isBinary = ["xlsx","xls"].includes(ext);
+    const fmtMap = {csv:"csv", xlsx:"excel", xls:"excel", json:"json",
+                    reqif:"reqif", xml:"reqif"};
+    const fmt = fmtMap[ext] || "csv";
+    const reader = new FileReader();
+    reader.onload = async e => {
+      let content = e.target.result;
+      let encoding = "utf-8";
+      if(isBinary){
+        // readAsDataURL gives data:...;base64,<data>
+        encoding = "base64";
+      }
+      const body = {format: fmt, content, encoding,
+                    similarity: $("exp-similarity").value,
+                    threshold: +$("exp-threshold").value,
+                    template: $("template").value, backend: $("backend").value};
+      await _doExport(body);
+    };
+    if(isBinary) reader.readAsDataURL(file);
+    else reader.readAsText(file);
+  }
+}
+
+async function _doExport(body){
+  $("exp-btn").disabled = true;
+  $("exp-btn").textContent = "Analyzing…";
+  try {
+    const r = await fetch("/api/export", {method:"POST",
+        headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)});
+    const d = await r.json();
+    if(d.error){ showExpError(d.error); return; }
+    expLast = d;
+    $("exportcard").hidden = false;
+    renderExportResults(d);
+  } catch(e){
+    showExpError("network error: " + e.message);
+  } finally {
+    $("exp-btn").disabled = false;
+    $("exp-btn").textContent = "Analyze →";
+  }
+}
+
+function showExpError(msg){
+  $("exp-error").style.display = msg ? "block" : "none";
+  $("exp-error").textContent = msg || "";
+}
+
+function renderExportResults(d){
+  $("exp-summary").innerHTML =
+    `<strong>${d.n_requirements}</strong> requirement${d.n_requirements!==1?"s":""} &nbsp;·&nbsp; ` +
+    `<strong>${d.n_connections}</strong> cross-requirement connection${d.n_connections!==1?"s":""} ` +
+    `&nbsp;·&nbsp; backend: <em>${d.backend}</em> &nbsp;·&nbsp; ` +
+    `similarity: <em>${d.similarity}</em> (threshold ${d.threshold})`;
+  renderExportGraph(d);
+  renderExportTable(d);
+}
+
+function renderExportGraph(d){
+  const reqs = d.requirements, n = Math.max(reqs.length, 1);
+  const R = Math.max(150, n * 34);
+  const W = R * 2 + 260, H = R * 2 + 220;
+  const cx = W / 2, cy = H / 2;
+  const pos = {};
+  reqs.forEach((r, i) => {
+    const a = (2 * Math.PI * i / n) - Math.PI / 2;
+    pos[r.id] = {x: cx + R * Math.cos(a), y: cy + R * Math.sin(a)};
+  });
+  let edges = "";
+  for(const c of d.connections){
+    const p1 = pos[c.req_a], p2 = pos[c.req_b];
+    if(!p1 || !p2) continue;
+    const col = c.role === "SUBJECT" ? "#185FA5" : "#0F6E56";
+    edges += `<path d="M${p1.x},${p1.y} L${p2.x},${p2.y}" stroke="${col}"
+      stroke-width="${(1 + 3 * c.score).toFixed(2)}" fill="none" opacity="0.55">
+      <title>${esc(c.role)} ~${c.score.toFixed(2)}~ "${esc(c.text_a)}"</title></path>`;
+  }
+  let nodes = "";
+  reqs.forEach(r => {
+    const p = pos[r.id];
+    const label = r.text.length > 34 ? r.text.slice(0, 31) + "…" : r.text;
+    const qcol = r.non_atomic ? "var(--bad)" :
+                 (r.weak_words ? "#E5A020" : "var(--ok)");
+    nodes += `<g><circle cx="${p.x}" cy="${p.y}" r="7" fill="${qcol}"/>
+      <title>${esc(r.id)}: ${esc(r.text)}${r.type ? " ["+r.type+"]" : ""}${r.weak_words ? " ⚠ "+r.weak_words : ""}</title>
+      <text x="${p.x}" y="${p.y - 12}" text-anchor="middle" font-size="11"
+        font-weight="600" fill="#2c2c2a">${esc(r.id)}</text>
+      <text x="${p.x}" y="${p.y + 18}" text-anchor="middle" font-size="9.5"
+        fill="#6f6e68">${esc(label)}</text></g>`;
+  });
+  const svg = $("exp-conngraph");
+  if(n < 2 && d.connections.length === 0){
+    svg.setAttribute("viewBox","0 0 1 1");
+    svg.setAttribute("width",1); svg.setAttribute("height",1);
+    svg.innerHTML = "";
+    return;
+  }
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.setAttribute("width", W); svg.setAttribute("height", H);
+  svg.innerHTML = edges + nodes;
+}
+
+function renderExportTable(d){
+  if(!d.requirements.length){ $("exp-thead").innerHTML=""; $("exp-tbody").innerHTML=""; return; }
+  // discover all columns from the first req object
+  const metaKeys = [];
+  const standard = new Set(["id","text","type","ears_pattern","weak_words","non_atomic",
+    "subject","object","condition","process","constraint"]);
+  const first = d.requirements[0];
+  for(const k of Object.keys(first)){
+    if(!standard.has(k)) metaKeys.push(k);
+  }
+  const showCols = ["id","text",...metaKeys,"type","ears_pattern",
+                    "condition","subject","object","process","constraint",
+                    "weak_words","non_atomic"];
+  const hdrs = showCols.map(k => `<th>${esc(k.replace(/_/g," "))}</th>`).join("");
+  $("exp-thead").innerHTML = `<tr>${hdrs}</tr>`;
+  $("exp-tbody").innerHTML = d.requirements.map(r => {
+    const cells = showCols.map(k => {
+      let v = r[k] ?? "";
+      if(k === "non_atomic")
+        return `<td>${v ? '<span class="qty-bad">⚠ yes</span>' : "no"}</td>`;
+      if(k === "type" && v)
+        return `<td><span style="font-size:11px;padding:2px 8px;border-radius:99px;
+          background:var(--accent-soft);border:1px solid #d9d6f5;color:var(--accent)">${esc(v)}</span></td>`;
+      if(k === "weak_words" && v)
+        return `<td><span class="qty-bad">${esc(v)}</span></td>`;
+      return `<td>${esc(String(v))}</td>`;
+    }).join("");
+    return `<tr>${cells}</tr>`;
+  }).join("");
+}
+
+function dlExport(kind){
+  if(!expLast) return;
+  const map = {
+    csv:    [expLast.csv_data, "requirements_export.csv", "text/csv"],
+    json:   [JSON.stringify(expLast.requirements, null, 2), "requirements_export.json", "application/json"],
+    graphml:[expLast.graphml, "requirements_consolidated.graphml", "application/xml"],
+    mermaid:[expLast.mermaid, "requirements_connections.mmd", "text/plain"],
+    turtle: [expLast.turtle, "requirements_connections.ttl", "text/turtle"],
+    cypher: [expLast.cypher, "requirements_connections.cypher", "text/plain"],
+  };
+  const [data, name, mime] = map[kind];
+  if(data == null) return;
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([data], {type:mime}));
+  a.download = name; a.click(); URL.revokeObjectURL(a.href);
+}
+
 boot();
 bootSet();
+bootExport();
 </script>
 </body>
 </html>
