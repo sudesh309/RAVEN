@@ -109,6 +109,23 @@
   .tab-btn:hover:not(.active){border-color:var(--accent);color:var(--accent)}
   #exp-connwrap{overflow-x:auto;margin-bottom:16px}
   .qty-ok{color:var(--ok)} .qty-bad{color:var(--bad)}
+  #exp-warn,#set-warn{display:none;background:#FBF3E2;color:#7A5A12;
+    border:1px solid #ECD9A6;border-radius:8px;padding:9px 13px;font-size:13.5px}
+  #exp-warn ul,#set-warn ul{margin:4px 0 0;padding-left:20px}
+  .thr-val{display:inline-block;min-width:34px;color:var(--accent);font-weight:600}
+  details.paramhelp{margin-top:10px;font-size:13px;color:var(--muted)}
+  details.paramhelp summary{cursor:pointer;color:var(--accent);font-weight:600;
+    list-style:none;user-select:none}
+  details.paramhelp summary::before{content:"\\24D8  ";font-weight:400}
+  details.paramhelp[open] summary{margin-bottom:6px}
+  details.paramhelp ul{margin:4px 0;padding-left:20px;line-height:1.65}
+  details.paramhelp code{background:var(--accent-soft);border-radius:4px;
+    padding:1px 5px;font-size:12px}
+  .graph-legend{display:flex;flex-wrap:wrap;gap:14px;align-items:center;
+    font-size:12px;color:var(--text);margin-bottom:6px}
+  .graph-legend .ll{display:flex;align-items:center;gap:5px}
+  .graph-legend .dot{width:10px;height:10px;border-radius:50%}
+  .graph-legend .ln{width:18px;height:3px;border-radius:2px}
 </style>
 </head>
 <body>
@@ -188,8 +205,9 @@
   <section class="card">
     <h2>Requirement set &mdash; find connections</h2>
     <div class="hint" style="margin:0 0 8px;display:block">
-      One requirement per line. Each line gets its own graph; SUBJECT/OBJECT
-      elements that recur across different lines are connected below.
+      <b>Quick look:</b> paste one requirement per line and see which lines share a
+      similar subject/object. For file import (CSV/Excel/JSON/ReqIF), quality
+      scoring and extra attributes, use <b>Import &amp; analyze</b> below.
     </div>
     <textarea id="set-text" spellcheck="false" style="min-height:130px"></textarea>
     <div class="controls">
@@ -200,12 +218,24 @@
           <option value="lexical" selected>lexical (no deps)</option>
           <option value="embedding">BERT embedding</option>
         </select></div>
-      <div class="ctl"><label for="set-threshold">Threshold</label>
-        <input id="set-threshold" class="num" type="number" min="0" max="1" step="0.05" value="0.6"></div>
+      <div class="ctl"><label for="set-threshold">Threshold <span id="set-thr-val" class="thr-val">0.60</span></label>
+        <input id="set-threshold" type="range" min="0" max="1" step="0.05" value="0.6"
+               style="width:130px" oninput="$('set-thr-val').textContent=(+this.value).toFixed(2)"></div>
       <button class="primary" id="set-parse" style="align-self:flex-end">Find connections</button>
     </div>
+    <details class="paramhelp">
+      <summary>What do Similarity and Threshold mean?</summary>
+      <ul>
+        <li><b>Similarity</b> — <b>lexical</b> compares words (instant, no deps);
+          <b>BERT embedding</b> compares meaning/synonyms (needs PyTorch +
+          transformers).</li>
+        <li><b>Threshold</b> — similarity cut-off 0–1. Two lines link only when a
+          shared subject/object scores ≥ this. Higher = stricter; 0.6 is balanced.</li>
+      </ul>
+    </details>
   </section>
 
+  <div id="set-warn"></div>
   <div id="set-error"></div>
 
   <section class="card" id="setcard" hidden>
@@ -235,42 +265,64 @@
   <section class="card">
     <h2>Import &amp; analyze requirement set</h2>
     <div class="hint" style="margin:0 0 10px;display:block">
-      Upload a file (CSV, Excel, JSON, ReqIF) or paste CSV/JSON text.
-      Extra columns like <em>rationale</em>, <em>applicability</em>, <em>additional_info</em>
-      are detected automatically and preserved in all outputs.
+      Run the full pipeline over a whole set: parse every requirement, score its
+      quality, and find requirements that share a similar subject/object. Upload a
+      file or paste text. Extra columns like <em>rationale</em>,
+      <em>applicability</em>, <em>additional_info</em> are detected automatically
+      and preserved in every output.
     </div>
     <div class="tab-btns">
-      <button class="tab-btn active" id="exp-tab-file" onclick="expTab('file')">&#128193; Upload file</button>
-      <button class="tab-btn" id="exp-tab-paste" onclick="expTab('paste')">&#128203; Paste text</button>
+      <button class="tab-btn active" id="exp-tab-paste" onclick="expTab('paste')">&#128203; Paste text</button>
+      <button class="tab-btn" id="exp-tab-file" onclick="expTab('file')">&#128193; Upload file</button>
     </div>
-    <div id="exp-file-pane">
+    <div id="exp-file-pane" style="display:none">
       <input type="file" id="exp-file" accept=".csv,.xlsx,.xls,.json,.reqif,.xml"
              style="font:inherit;cursor:pointer">
+      <div class="hint" style="display:block;margin-top:6px">
+        Accepts <b>.csv .xlsx .xls .json .reqif .xml</b>. CSV/Excel need a header
+        row with a <code>text</code> column (and optionally <code>id</code>).
+      </div>
     </div>
-    <div id="exp-paste-pane" style="display:none">
+    <div id="exp-paste-pane">
       <div class="controls" style="margin-top:0;margin-bottom:6px">
         <div class="ctl"><label for="exp-format">Format</label>
-          <select id="exp-format">
-            <option value="csv">CSV</option>
+          <select id="exp-format" onchange="expPlaceholder()">
+            <option value="lines" selected>Plain text — one per line</option>
+            <option value="csv">CSV (with header row)</option>
             <option value="json">JSON</option>
             <option value="reqif">ReqIF (XML)</option>
           </select></div>
       </div>
       <textarea id="exp-text" spellcheck="false" style="min-height:130px"
-        placeholder="Paste CSV (with header row) or JSON array content here..."></textarea>
+        placeholder="Paste one requirement per line, e.g.&#10;The system shall log every error to the audit trail.&#10;The operator shall be able to acknowledge an alarm within 2 seconds."></textarea>
     </div>
     <div class="controls">
       <div class="ctl"><label for="exp-similarity">Similarity</label>
-        <select id="exp-similarity" title="how elements are compared">
+        <select id="exp-similarity" title="how two subject/object spans are compared">
           <option value="lexical" selected>lexical (no deps)</option>
           <option value="embedding">BERT embedding</option>
         </select></div>
-      <div class="ctl"><label for="exp-threshold">Threshold</label>
-        <input id="exp-threshold" class="num" type="number" min="0" max="1" step="0.05" value="0.6"></div>
+      <div class="ctl"><label for="exp-threshold">Threshold <span id="exp-thr-val" class="thr-val">0.60</span></label>
+        <input id="exp-threshold" type="range" min="0" max="1" step="0.05" value="0.6"
+               style="width:130px" oninput="$('exp-thr-val').textContent=(+this.value).toFixed(2)"></div>
       <button class="primary" id="exp-btn" style="align-self:flex-end">Analyze &rarr;</button>
     </div>
+    <details class="paramhelp">
+      <summary>What do these settings mean?</summary>
+      <ul>
+        <li><b>Similarity</b> — how two subject/object phrases are compared.
+          <b>lexical</b> uses word overlap + character similarity (instant, no
+          dependencies). <b>BERT embedding</b> compares meaning (catches synonyms)
+          but needs PyTorch + transformers installed.</li>
+        <li><b>Threshold</b> — the similarity cut-off, 0 to 1. Two requirements are
+          linked only when a shared subject/object scores at or above this value.
+          <b>Higher = stricter</b> (fewer, more confident links); lower surfaces
+          more, looser matches. 0.6 is a balanced default.</li>
+      </ul>
+    </details>
   </section>
 
+  <div id="exp-warn"></div>
   <div id="exp-error"></div>
 
   <section class="card" id="exportcard" hidden>
@@ -290,6 +342,14 @@
       </div>
     </div>
     <div id="exp-summary" style="margin:6px 0 12px;color:var(--muted);font-size:13px"></div>
+    <div class="graph-legend" id="exp-graph-legend">
+      <span class="ll"><span class="dot" style="background:var(--ok)"></span>clean</span>
+      <span class="ll"><span class="dot" style="background:#E5A020"></span>weak words</span>
+      <span class="ll"><span class="dot" style="background:var(--bad)"></span>non-atomic</span>
+      <span class="ll"><span class="ln" style="background:#185FA5"></span>shared SUBJECT</span>
+      <span class="ll"><span class="ln" style="background:#0F6E56"></span>shared OBJECT</span>
+      <span class="ll" style="color:var(--muted)">thicker line = stronger match</span>
+    </div>
     <div id="exp-connwrap"><svg id="exp-conngraph"></svg></div>
     <div style="overflow-x:auto">
       <table id="exp-table">
@@ -297,6 +357,30 @@
         <tbody id="exp-tbody"></tbody>
       </table>
     </div>
+    <details class="paramhelp" style="margin-top:14px">
+      <summary>What do the quality columns mean?</summary>
+      <ul>
+        <li><b>type</b> — requirement category inferred from keywords: functional,
+          performance, interface, safety, or usability.</li>
+        <li><b>ears pattern</b> — EARS clause shape from the condition:
+          <em>ubiquitous</em> (always active), <em>event-driven (WHEN)</em>,
+          <em>state-driven (WHILE)</em>, <em>unwanted behaviour (IF/THEN)</em>, or
+          <em>optional feature (WHERE)</em>.</li>
+        <li><b>weak words</b> — vague/unverifiable terms (fast, robust,
+          user-friendly, optimal, approximately…) that make a requirement
+          ambiguous. Empty is good.</li>
+        <li><b>non-atomic</b> — the sentence packs several actions joined by
+          <em>and/or</em>; it should usually be split so each can be tested
+          independently.</li>
+        <li><b>subject / object / condition / process / constraint</b> — the parsed
+          IREB-Rupp role spans extracted from each requirement; these drive the
+          connections above (requirements sharing a similar subject/object link).</li>
+      </ul>
+      <div class="hint" style="display:block;margin-top:4px">
+        Other smells (passive voice, missing modality, vague quantifier, compound)
+        are computed too and appear in the per-requirement view of the top panel.
+      </div>
+    </details>
   </section>
 </main>
 
@@ -568,24 +652,41 @@ function bootSet(){
 }
 
 async function parseSet(){
+  showSetError(null); showSetWarn(null);
   const lines = $("set-text").value.split("\n").map(s => s.trim()).filter(Boolean);
   if(!lines.length){ showSetError("enter at least one requirement (one per line)"); return; }
-  const body = {texts: lines, template: $("template").value, backend: $("backend").value,
-                similarity: $("set-similarity").value, threshold: +$("set-threshold").value};
-  const r = await fetch("/api/connections", {method:"POST",
-      headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)});
-  const d = await r.json();
-  if(d.error){ showSetError(d.error); return; }
-  showSetError(null);
-  setLast = d;
-  $("setcard").hidden = false;
-  renderConnGraph(d);
-  renderConnTable(d);
+  const btn = $("set-parse"); btn.disabled = true; const lbl = btn.textContent;
+  btn.textContent = "Finding…";
+  try {
+    const body = {texts: lines, template: $("template").value, backend: $("backend").value,
+                  similarity: $("set-similarity").value, threshold: +$("set-threshold").value};
+    const r = await fetch("/api/connections", {method:"POST",
+        headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)});
+    const d = await r.json();
+    if(d.error){ showSetError(d.error); return; }
+    showSetWarn(d.warnings);
+    setLast = d;
+    $("setcard").hidden = false;
+    renderConnGraph(d);
+    renderConnTable(d);
+  } catch(e){
+    showSetError("network error: " + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = lbl;
+  }
 }
 
 function showSetError(msg){
   $("set-error").style.display = msg ? "block" : "none";
   $("set-error").textContent = msg || "";
+}
+
+function showSetWarn(warnings){
+  const box = $("set-warn");
+  if(!warnings || !warnings.length){ box.style.display = "none"; box.innerHTML = ""; return; }
+  box.style.display = "block";
+  box.innerHTML = "&#9888; " + (warnings.length === 1 ? esc(warnings[0])
+    : "<b>Heads up:</b><ul>" + warnings.map(w => `<li>${esc(w)}</li>`).join("") + "</ul>");
 }
 
 function renderConnGraph(d){
@@ -665,21 +766,33 @@ function expTab(tab){
   $("exp-tab-paste").className = "tab-btn" + (tab === "paste" ? " active" : "");
 }
 
+const EXP_PLACEHOLDERS = {
+  lines: "Paste one requirement per line, e.g.\nThe system shall log every error to the audit trail.\nThe operator shall be able to acknowledge an alarm within 2 seconds.",
+  csv:   "Paste CSV with a header row, e.g.\nid,text,rationale\nR1,The system shall log every error.,audit trail",
+  json:  'Paste a JSON array, e.g.\n[{"id":"R1","text":"The system shall log every error.","rationale":"audit"}]',
+  reqif: "Paste ReqIF XML content here...",
+};
+function expPlaceholder(){
+  $("exp-text").placeholder = EXP_PLACEHOLDERS[$("exp-format").value] || "";
+}
+
 function bootExport(){
   $("exp-btn").onclick = parseExport;
+  expTab("paste");
+  expPlaceholder();
   $("exp-file").addEventListener("change", () => {
     if($("exp-file").files.length) parseExport();
   });
 }
 
 async function parseExport(){
-  showExpError(null);
+  showExpError(null); showExpWarn(null);
   const fileInput = $("exp-file");
   const pasteVisible = $("exp-paste-pane").style.display !== "none";
 
   if(pasteVisible){
     const content = $("exp-text").value.trim();
-    if(!content){ showExpError("please paste some content"); return; }
+    if(!content){ showExpError("nothing to analyze — paste some text first, or switch to the Upload file tab"); return; }
     const body = {format: $("exp-format").value, content,
                   encoding: "utf-8",
                   similarity: $("exp-similarity").value,
@@ -737,12 +850,30 @@ function showExpError(msg){
   $("exp-error").textContent = msg || "";
 }
 
+function showExpWarn(warnings){
+  const box = $("exp-warn");
+  if(!warnings || !warnings.length){ box.style.display = "none"; box.innerHTML = ""; return; }
+  box.style.display = "block";
+  box.innerHTML = "&#9888; " + (warnings.length === 1 ? esc(warnings[0])
+    : "<b>Heads up:</b><ul>" + warnings.map(w => `<li>${esc(w)}</li>`).join("") + "</ul>");
+}
+
 function renderExportResults(d){
-  $("exp-summary").innerHTML =
-    `<strong>${d.n_requirements}</strong> requirement${d.n_requirements!==1?"s":""} &nbsp;·&nbsp; ` +
-    `<strong>${d.n_connections}</strong> cross-requirement connection${d.n_connections!==1?"s":""} ` +
-    `&nbsp;·&nbsp; backend: <em>${d.backend}</em> &nbsp;·&nbsp; ` +
-    `similarity: <em>${d.similarity}</em> (threshold ${d.threshold})`;
+  showExpWarn(d.warnings);
+  if(!d.n_connections && d.n_requirements >= 2){
+    $("exp-summary").innerHTML =
+      `<strong>${d.n_requirements}</strong> requirements · ` +
+      `<strong>no connections</strong> at threshold ${d.threshold} ` +
+      `— try lowering the threshold or switching similarity to BERT embedding.`;
+  } else {
+    $("exp-summary").innerHTML =
+      `<strong>${d.n_requirements}</strong> requirement${d.n_requirements!==1?"s":""} &nbsp;·&nbsp; ` +
+      `<strong>${d.n_connections}</strong> cross-requirement connection${d.n_connections!==1?"s":""} ` +
+      `&nbsp;·&nbsp; backend: <em>${d.backend}</em> &nbsp;·&nbsp; ` +
+      `similarity: <em>${d.similarity}</em> (threshold ${d.threshold})`;
+  }
+  // the color legend only makes sense once there's a graph to read
+  $("exp-graph-legend").style.display = (d.n_requirements >= 2) ? "flex" : "none";
   renderExportGraph(d);
   renderExportTable(d);
 }

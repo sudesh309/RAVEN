@@ -916,3 +916,42 @@ def test_gui_export_request_rejects_empty():
     from reqgraph.gui import GuiState, export_request
     with pytest.raises(ReqGraphError):
         export_request(GuiState(), {"format": "csv", "content": "   "})
+
+
+def test_gui_export_plain_text_lines():
+    """Pasting plain requirements one-per-line must work (regression: this used
+    to fail because the backend assumed a CSV header)."""
+    from reqgraph.gui import GuiState, export_request
+    pasted = "\n".join(t for _, t in SET_REQS)
+    for fmt in ("lines", "", "text"):                       # all mean plain text
+        d = export_request(GuiState(), {"format": fmt, "content": pasted})
+        assert d["n_requirements"] == 4, fmt
+    # default (no format key at all) also treats paste as plain lines
+    d = export_request(GuiState(), {"content": pasted})
+    assert d["n_requirements"] == 4
+
+
+def test_gui_export_csv_without_text_column_hints_plain_text():
+    """A CSV/plain mix-up should produce a helpful, actionable error."""
+    from reqgraph import ReqGraphError
+    from reqgraph.gui import GuiState, export_request
+    pasted = "\n".join(t for _, t in SET_REQS)
+    with pytest.raises(ReqGraphError) as ei:
+        export_request(GuiState(), {"format": "csv", "content": pasted})
+    assert "Plain text" in str(ei.value)
+
+
+def test_gui_export_threshold_clamped_with_warning():
+    from reqgraph.gui import GuiState, export_request
+    pasted = "\n".join(t for _, t in SET_REQS)
+    d = export_request(GuiState(), {"content": pasted, "threshold": 9})
+    assert d["threshold"] == 1.0
+    assert any("clamped" in w for w in d["warnings"])
+
+
+def test_gui_export_bad_similarity_rejected():
+    from reqgraph import ReqGraphError
+    from reqgraph.gui import GuiState, export_request
+    pasted = "\n".join(t for _, t in SET_REQS)
+    with pytest.raises(ReqGraphError):
+        export_request(GuiState(), {"content": pasted, "similarity": "magic"})

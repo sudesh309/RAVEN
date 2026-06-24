@@ -42,18 +42,57 @@ def _build_parser(template_name, backend, model):
 
 
 def _read_items(path):
+    from .errors import DataFormatError
     from .io_formats import (read_reqif, read_requirements_csv,
                              read_requirements_excel, read_requirements_json)
+    if not os.path.isfile(path):
+        sys.exit(f"error: input file not found: {path}")
     ext = os.path.splitext(path)[1].lower()
-    if ext == ".csv":
-        return read_requirements_csv(path)
-    if ext in (".xlsx", ".xls"):
-        return read_requirements_excel(path)
-    if ext in (".reqif", ".xml"):
-        return read_reqif(path)
-    if ext == ".json":
-        return read_requirements_json(path)
-    sys.exit(f"error: unsupported input extension {ext!r}")
+    readers = {".csv": read_requirements_csv, ".json": read_requirements_json,
+               ".xlsx": read_requirements_excel, ".xls": read_requirements_excel,
+               ".reqif": read_reqif, ".xml": read_reqif}
+    if ext not in readers:
+        sys.exit(f"error: unsupported input extension {ext!r}; use one of "
+                 f".csv .xlsx .xls .json .reqif .xml")
+    try:
+        return readers[ext](path)
+    except DataFormatError as exc:
+        sys.exit(f"error: {exc}")
+    except Exception as exc:                       # malformed file, bad encoding…
+        sys.exit(f"error: could not read {path}: {exc}")
+
+
+def _parse_roles(spec):
+    """Parse a --roles string like 'SUBJECT,OBJECT' into Role enums."""
+    try:
+        return tuple(Role(r.strip().upper()) for r in spec.split(",") if r.strip())
+    except ValueError as exc:
+        sys.exit(f"error: unknown role {exc}; choose from "
+                 f"{', '.join(r.value for r in Role)}")
+
+
+def _validate_threshold(value):
+    if value < 0 or value > 1:
+        clamped = min(1.0, max(0.0, value))
+        print(f"warning: threshold {value:g} is outside 0–1; clamped to {clamped:g}",
+              file=sys.stderr)
+        return clamped
+    return value
+
+
+def _build_set_graph_cli(items, *, template, extractor, roles, threshold,
+                         similarity, embedding_model):
+    """build_requirement_set_graph with a friendly message if the optional
+    embedding backend's dependencies are missing."""
+    from .corpus import build_requirement_set_graph
+    try:
+        return build_requirement_set_graph(
+            items, template=template, extractor=extractor, roles=roles,
+            threshold=threshold, similarity=similarity,
+            embedding_model=embedding_model)
+    except ImportError as exc:
+        sys.exit(f"error: --similarity embedding needs PyTorch + transformers "
+                 f"installed ({exc}); use --similarity lexical (no extra deps)")
 
 
 # --- subcommands -----------------------------------------------------------
@@ -171,19 +210,20 @@ def cmd_gui(args):
 
 
 def cmd_connections(args):
-    from .corpus import build_requirement_set_graph
     items = _read_items(args.infile)
+    if not items:
+        sys.exit("error: no requirements found in input file")
     ex = None
     if args.backend == "spacy":
         ex = SpacyExtractor()
     elif args.backend == "bert":
         ex = BertTaggerExtractor(model_dir=args.model)
     template = TEMPLATES.get(args.template, RUPP_TEMPLATE)
-    roles = tuple(Role(r.strip().upper()) for r in args.roles.split(","))
+    roles = _parse_roles(args.roles)
 
-    rsg = build_requirement_set_graph(
+    rsg = _build_set_graph_cli(
         items, template=template, extractor=ex, roles=roles,
-        threshold=args.threshold, similarity=args.similarity,
+        threshold=_validate_threshold(args.threshold), similarity=args.similarity,
         embedding_model=args.embedding_model)
 
     fmt = args.format
@@ -244,8 +284,6 @@ def cmd_analyze(args):
 
 def cmd_export(args):
     """Parse + quality analysis + connections → CSV, JSON, consolidated GraphML."""
-    from .corpus import build_requirement_set_graph
-
     items = _read_items(args.infile)
     if not items:
         sys.exit("error: no requirements found in input file")
@@ -258,7 +296,7 @@ def cmd_export(args):
             sys.exit("error: --backend bert requires --model")
         ex = BertTaggerExtractor(model_dir=args.model)
     template = TEMPLATES.get(args.template, RUPP_TEMPLATE)
-    roles = tuple(Role(r.strip().upper()) for r in args.roles.split(","))
+    roles = _parse_roles(args.roles)
 
     prefix = args.out_prefix
     csv_path   = args.csv     or (f"{prefix}.csv"     if prefix else None)
@@ -269,9 +307,9 @@ def cmd_export(args):
         sys.exit("error: specify --out-prefix or at least one of --csv / --json / --graphml")
 
     # build set graph: parses every requirement and finds cross-req connections
-    rsg = build_requirement_set_graph(
+    rsg = _build_set_graph_cli(
         items, template=template, extractor=ex, roles=roles,
-        threshold=args.threshold, similarity=args.similarity,
+        threshold=_validate_threshold(args.threshold), similarity=args.similarity,
         embedding_model=args.embedding_model)
 
     # flat quality + metadata table, derived from the already-parsed (and

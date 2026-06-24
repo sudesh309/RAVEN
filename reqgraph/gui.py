@@ -156,6 +156,57 @@ class GuiState:
 # payload builders (pure functions, unit-testable)
 # ---------------------------------------------------------------------------
 
+# value the GUI sends for "paste plain requirements, one per line"
+_PLAIN_FORMATS = {"lines", "text", "plain", "plaintext", ""}
+
+
+def _coerce_threshold(payload: dict, warnings: list) -> float:
+    """Parse + clamp the similarity threshold to [0, 1], warning if adjusted."""
+    try:
+        threshold = float(payload.get("threshold", 0.6))
+    except (TypeError, ValueError):
+        warnings.append("threshold was not a number; using the default 0.6")
+        return 0.6
+    if threshold < 0 or threshold > 1:
+        clamped = min(1.0, max(0.0, threshold))
+        warnings.append(f"threshold {threshold:g} is outside 0–1; clamped to {clamped:g}")
+        return clamped
+    return threshold
+
+
+def _coerce_roles(payload: dict):
+    role_names = payload.get("roles") or ["SUBJECT", "OBJECT"]
+    try:
+        return tuple(Role(r) for r in role_names)
+    except ValueError as exc:
+        raise ReqGraphError(
+            f"unknown role {exc}; choose from "
+            f"{', '.join(r.value for r in Role)}") from exc
+
+
+def _build_set_graph(state, items, payload, warnings):
+    """Shared builder for the connections/export endpoints with friendly errors
+    for the optional embedding backend."""
+    template = TEMPLATES.get(payload.get("template", ""), RUPP_TEMPLATE)
+    backend = payload.get("backend", "rules")
+    similarity = payload.get("similarity", "lexical")
+    if similarity not in ("lexical", "embedding"):
+        raise ReqGraphError(
+            f"unknown similarity {similarity!r}; use 'lexical' or 'embedding'")
+    threshold = _coerce_threshold(payload, warnings)
+    roles = _coerce_roles(payload)
+    try:
+        rsg = build_requirement_set_graph(
+            items, template=template, extractor=state.extractor(backend),
+            roles=roles, threshold=threshold, similarity=similarity)
+    except ImportError as exc:
+        raise ReqGraphError(
+            "the 'embedding' similarity needs PyTorch + transformers installed "
+            f"({exc}); switch Similarity back to 'lexical', which needs no extra "
+            "packages") from exc
+    return rsg, template, backend, similarity, threshold
+
+
 def _graph_to_tree(g) -> Optional[dict]:
     """Nested semantic tree (ROOT down), children sorted in text order."""
     if not g.root_id:
@@ -275,19 +326,9 @@ def connections_request(state: GuiState, payload: dict) -> dict:
         raise ReqGraphError("please enter at least one requirement (one per line)")
     items = [t for t in texts if isinstance(t, str) and t.strip()]
 
-    template = TEMPLATES.get(payload.get("template", ""), RUPP_TEMPLATE)
-    backend = payload.get("backend", "rules")
-    similarity = payload.get("similarity", "lexical")
-    threshold = float(payload.get("threshold", 0.6))
-    role_names = payload.get("roles") or ["SUBJECT", "OBJECT"]
-    try:
-        roles = tuple(Role(r) for r in role_names)
-    except ValueError as exc:
-        raise ReqGraphError(f"unknown role: {exc}") from exc
-
-    rsg = build_requirement_set_graph(
-        items, template=template, extractor=state.extractor(backend),
-        roles=roles, threshold=threshold, similarity=similarity)
+    warnings: list = []
+    rsg, template, backend, similarity, threshold = _build_set_graph(
+        state, items, payload, warnings)
 
     return {
         "requirements": [{"id": rid, "text": rsg.texts[rid]} for rid in rsg.req_ids],
@@ -307,6 +348,7 @@ def connections_request(state: GuiState, payload: dict) -> dict:
         "backend": backend,
         "similarity": similarity,
         "threshold": threshold,
+        "warnings": warnings,
     }
 
 
@@ -318,63 +360,22 @@ def export_request(state: GuiState, payload: dict) -> dict:
     detection, and returns the full analysis plus download-ready blobs
     (csv_data string, graphml string, etc.).
     """
-    from .io_formats import (read_requirements_csv, read_requirements_excel,
-                             read_requirements_json, read_reqif)
-
     content = payload.get("content", "")
     fmt = (payload.get("format") or "").lower().strip()
     encoding = (payload.get("encoding") or "utf-8").lower().strip()
 
     if not content or not str(content).strip():
-        raise ReqGraphError("please provide file content")
+        raise ReqGraphError("nothing to analyze — paste some text or choose a file")
 
-    # write content to a temp file so the existing readers can parse it
-    ext_map = {"csv": ".csv", "excel": ".xlsx", "xlsx": ".xlsx", "xls": ".xls",
-               "json": ".json", "reqif": ".reqif", "xml": ".reqif"}
-    suffix = ext_map.get(fmt, ".csv")
-
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        tmp_path = tmp.name
-        if encoding == "base64":
-            # strip data-URL prefix if present (e.g. data:application/...;base64,)
-            raw = content
-            if "," in raw:
-                raw = raw.split(",", 1)[1]
-            tmp.write(base64.b64decode(raw))
-        else:
-            tmp.write(content.encode("utf-8"))
-
-    try:
-        if suffix in (".xlsx", ".xls"):
-            items = read_requirements_excel(tmp_path)
-        elif suffix == ".json":
-            items = read_requirements_json(tmp_path)
-        elif suffix == ".reqif":
-            items = read_reqif(tmp_path)
-        else:
-            items = read_requirements_csv(tmp_path)
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+    warnings: list = []
+    items = _read_items_from_content(content, fmt, encoding, warnings)
 
     if not items:
-        raise ReqGraphError("no requirements found in the uploaded file")
+        raise ReqGraphError(
+            "no requirements found — the file/text parsed but contained no rows")
 
-    template = TEMPLATES.get(payload.get("template", ""), RUPP_TEMPLATE)
-    backend = payload.get("backend", "rules")
-    similarity = payload.get("similarity", "lexical")
-    threshold = float(payload.get("threshold", 0.6))
-    role_names = payload.get("roles") or ["SUBJECT", "OBJECT"]
-    try:
-        roles = tuple(Role(r) for r in role_names)
-    except ValueError as exc:
-        raise ReqGraphError(f"unknown role: {exc}") from exc
-
-    rsg = build_requirement_set_graph(
-        items, template=template, extractor=state.extractor(backend),
-        roles=roles, threshold=threshold, similarity=similarity)
+    rsg, template, backend, similarity, threshold = _build_set_graph(
+        state, items, payload, warnings)
 
     # split-aware quality table (matches the GraphML's split requirement set)
     df = rsg.to_dataframe()
@@ -416,7 +417,65 @@ def export_request(state: GuiState, payload: dict) -> dict:
         "backend": backend,
         "similarity": similarity,
         "threshold": threshold,
+        "warnings": warnings,
     }
+
+
+def _read_items_from_content(content: str, fmt: str, encoding: str,
+                             warnings: list) -> list:
+    """Turn pasted text or an uploaded file into ``(id, text, meta)`` items.
+
+    ``fmt`` of ``lines``/``text``/``plain`` (or empty) treats the content as one
+    requirement per non-blank line — the most natural thing to paste. Otherwise
+    the content is written to a temp file and handed to the matching reader.
+    """
+    from .io_formats import (read_requirements_csv, read_requirements_excel,
+                             read_requirements_json, read_reqif)
+
+    # plain text: one requirement per line, no header required
+    if fmt in _PLAIN_FORMATS and encoding != "base64":
+        return [ln.strip() for ln in content.splitlines() if ln.strip()]
+
+    ext_map = {"csv": ".csv", "excel": ".xlsx", "xlsx": ".xlsx", "xls": ".xls",
+               "json": ".json", "reqif": ".reqif", "xml": ".reqif"}
+    suffix = ext_map.get(fmt, ".csv")
+
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp_path = tmp.name
+        if encoding == "base64":
+            raw = content.split(",", 1)[1] if "," in content else content
+            try:
+                tmp.write(base64.b64decode(raw))
+            except Exception as exc:
+                raise ReqGraphError(f"could not decode the uploaded file: {exc}") from exc
+        else:
+            tmp.write(content.encode("utf-8"))
+
+    tabular = suffix in (".csv", ".xlsx", ".xls")
+    try:
+        if suffix in (".xlsx", ".xls"):
+            return read_requirements_excel(tmp_path)
+        if suffix == ".json":
+            return read_requirements_json(tmp_path)
+        if suffix == ".reqif":
+            return read_reqif(tmp_path)
+        return read_requirements_csv(tmp_path)
+    except Exception as exc:
+        # The #1 mistake is pasting plain requirements while Format is CSV/Excel
+        # (a missing 'text' column, or commas in the text breaking the parse).
+        if tabular:
+            raise ReqGraphError(
+                f"could not read this as {fmt or 'CSV'}: {exc}. "
+                f"If you pasted plain requirements (one per line), set the Format "
+                f"selector to 'Plain text'. For CSV/Excel, the first row must be a "
+                f"header containing a 'text' column (and optionally 'id').") from exc
+        raise ReqGraphError(
+            f"could not parse the {fmt or 'input'} content: {exc}") from exc
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
 
 
 # ---------------------------------------------------------------------------

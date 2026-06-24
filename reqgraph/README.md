@@ -503,6 +503,48 @@ for every SUBJECT/OBJECT/CONDITION/… span (`HAS_ELEMENT` edges), and `SIMILAR_
 cross-requirement edges weighted by similarity — so tools like Gephi / yEd /
 Cytoscape show all connected subjects and objects across the whole set.
 
+#### `similarity` and `threshold`
+
+Both `connections` and `export` connect requirements that share a similar
+SUBJECT/OBJECT phrase. Two knobs control this:
+
+* **`--similarity`** — how two phrases are compared. `lexical` (default) blends
+  word-overlap (Jaccard) with character similarity; it is instant and needs no
+  extra packages. `embedding` uses BERT cosine similarity (catches synonyms /
+  paraphrases) but requires `torch` + `transformers`.
+* **`--threshold`** *(0–1, default 0.6)* — the similarity cut-off. A link is kept
+  only when the shared phrase scores **≥ threshold**. Higher is stricter (fewer,
+  higher-confidence links); lower surfaces more, looser matches. Values outside
+  0–1 are clamped with a warning.
+
+### Quality parameters
+
+`reqgraph.quality.enrich(graph)` attaches an IREB-flavoured analysis to
+`graph.analysis` (no ML required). These are the columns/flags you see in the
+batch table, the `export` outputs, and the GUI:
+
+| Parameter | Meaning |
+|---|---|
+| **type** | Requirement category inferred from keyword counts: `functional`, `performance`, `interface`, `safety`, or `usability`. |
+| **ears_pattern** | EARS clause shape from the CONDITION marker: `ubiquitous` (always active), `event-driven (WHEN)`, `state-driven (WHILE)`, `unwanted behaviour (IF/THEN)`, or `optional feature (WHERE)`. |
+| **weak_words** | Vague / unverifiable terms (`fast`, `robust`, `user-friendly`, `optimal`, `approximately`, …) — they make a requirement ambiguous. Empty is good. |
+| **passive_voice** | The action is phrased passively (“shall be logged”), hiding the responsible actor. |
+| **missing_modality** | No `shall/should/must/will/may/can` — the statement is not phrased as a binding requirement. |
+| **vague_quantifier** | Unbounded quantities (`some`, `several`, `many`, `as much as possible`) that cannot be verified. |
+| **non_atomic** | The sentence joins multiple clauses with `and`/`or`; it should usually be split so each part is independently testable. |
+| **compound_requirement** | More than one modality verb (e.g. two `shall`s) — likely two requirements in one line; `parse`/`export` split these automatically. |
+| **roundtrip_ok** | Sanity check: the parsed graph regenerates the original text byte-for-byte. |
+
+```python
+from reqgraph import RequirementParser, RUPP_TEMPLATE
+from reqgraph.quality import enrich
+g = enrich(RequirementParser(RUPP_TEMPLATE).parse(
+    "The system shall quickly process all requests."))
+print(g.analysis["type"])               # 'functional'
+print(g.analysis["ears_pattern"])        # 'ubiquitous'
+print(g.analysis["quality"]["weak_words"])   # ['quickly']
+```
+
 ## GUI
 
 ```bash
