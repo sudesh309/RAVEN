@@ -795,6 +795,50 @@ def test_to_element_graphml_has_has_element_edges():
     assert "HAS_ELEMENT" in gml
 
 
+def test_to_element_graphml_no_duplicate_node_ids_adversarial():
+    """A requirement id that looks like another's {id}__{node_id} must not
+    produce a duplicate GraphML node id (regression)."""
+    import re
+    import xml.dom.minidom
+    from reqgraph.corpus import build_requirement_set_graph
+    items = [("A", "The system shall log data."),
+             ("A__subject_1", "The pilot shall act.")]
+    gml = build_requirement_set_graph(items).to_element_graphml()
+    xml.dom.minidom.parseString(gml.encode("utf-8"))   # well-formed
+    ids = re.findall(r'<node id="([^"]*)"', gml)
+    assert len(ids) == len(set(ids)), "duplicate GraphML node ids"
+
+
+def test_build_set_graph_metadata_not_aliased_across_splits():
+    """Each split segment must get its own metadata dict (regression: they used
+    to share one object, so mutating one changed its siblings)."""
+    from reqgraph.corpus import build_requirement_set_graph
+    items = [("C1", "The system shall open the valve and the controller shall "
+                    "log the event.", {"rationale": "r"})]
+    rsg = build_requirement_set_graph(items)
+    a, b = rsg.req_ids
+    rsg.metadata[a]["mutated"] = "x"
+    assert "mutated" not in rsg.metadata[b]
+
+
+def test_gui_export_table_matches_csv_on_collision():
+    """A metadata column that collides with a parsed/reserved column must be
+    namespaced (attr_*) identically in the on-screen table and the CSV download
+    (regression: the table silently showed the parsed element instead)."""
+    import csv as _csv, io as _io
+    from reqgraph.gui import GuiState, export_request
+    buf = _io.StringIO()
+    w = _csv.writer(buf)
+    w.writerow(["id", "text", "subject"])           # 'subject' collides
+    w.writerow(["R1", "The system shall log errors.", "USER-SUBJECT"])
+    d = export_request(GuiState(), {"format": "csv", "content": buf.getvalue()})
+    row = d["requirements"][0]
+    assert row["attr_subject"] == "USER-SUBJECT"     # user value preserved
+    assert row["subject"] == "The system"            # parsed element kept too
+    csv_row = next(_csv.DictReader(_io.StringIO(d["csv_data"])))
+    assert csv_row["attr_subject"] == "USER-SUBJECT"  # table == CSV
+
+
 def test_to_element_graphml_metadata_in_req_node():
     from reqgraph.corpus import build_requirement_set_graph
     items = [

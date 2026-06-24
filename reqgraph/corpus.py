@@ -231,6 +231,23 @@ class RequirementSetGraph:
         """
         from .quality import enrich as _enrich
 
+        # Pre-assign every node a unique id. REQ nodes keep their requirement id;
+        # ELEMENT nodes are namespaced {req_id}__{node_id}. Track used ids so a
+        # (pathological) requirement id equal to another's element id can't yield
+        # a duplicate GraphML node id -- the map is shared by HAS_ELEMENT and
+        # SIMILAR_* edges so every edge endpoint resolves to a real node.
+        used = set(self.req_ids)
+        elem_id: dict = {}
+        for rid in self.req_ids:
+            for n in self.graphs[rid].elements():
+                if n.role.value == "GLUE":
+                    continue
+                cand = f"{rid}__{n.id}"
+                while cand in used:
+                    cand += "_"
+                used.add(cand)
+                elem_id[(rid, n.id)] = cand
+
         ns = "http://graphml.graphdrawing.org/xmlns"
         lines = [
             '<?xml version="1.0" encoding="UTF-8"?>',
@@ -277,8 +294,7 @@ class RequirementSetGraph:
             for n in g.elements():
                 if n.role.value == "GLUE":
                     continue
-                elem_id = f"{rid}__{n.id}"
-                elem_esc = _xml_escape(elem_id)
+                elem_esc = _xml_escape(elem_id[(rid, n.id)])
                 lines.append(f'    <node id="{elem_esc}">')
                 lines.append(f'      <data key="node_type">ELEMENT</data>')
                 lines.append(f'      <data key="role">{_xml_escape(n.role.value)}</data>')
@@ -295,14 +311,17 @@ class RequirementSetGraph:
         for c in self.connections:
             if c.role not in similarity_roles:
                 continue
-            src = _xml_escape(f"{c.a.req_id}__{c.a.node_id}")
-            tgt = _xml_escape(f"{c.b.req_id}__{c.b.node_id}")
-            pair_key = (src, tgt, c.role.value)
+            a_id = elem_id.get((c.a.req_id, c.a.node_id))
+            b_id = elem_id.get((c.b.req_id, c.b.node_id))
+            if a_id is None or b_id is None:           # no matching ELEMENT node
+                continue
+            pair_key = (a_id, b_id, c.role.value)
             if pair_key in seen_pairs:
                 continue
             seen_pairs.add(pair_key)
             rel_label = f"SIMILAR_{c.role.value}"
-            lines.append(f'    <edge id="e{edge_counter}" source="{src}" target="{tgt}">')
+            lines.append(f'    <edge id="e{edge_counter}" '
+                         f'source="{_xml_escape(a_id)}" target="{_xml_escape(b_id)}">')
             lines.append(f'      <data key="rel">{rel_label}</data>')
             lines.append(f'      <data key="score">{c.score:.4f}</data>')
             lines.append('    </edge>')
@@ -405,7 +424,10 @@ def build_requirement_set_graph(
             req_ids.append(display_id)
             texts[display_id] = seg
             graphs[display_id] = g
-            metadata[display_id] = item_meta
+            # copy per segment: split segments must not alias one dict (nor the
+            # caller's input), otherwise mutating one requirement's metadata
+            # would silently change its siblings'.
+            metadata[display_id] = dict(item_meta)
             for n in g.elements():
                 if n.role in roles:
                     elements.append(ElementRef(display_id, n.id, n.role, n.text.strip()))

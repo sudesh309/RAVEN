@@ -869,8 +869,8 @@ function renderExportResults(d){
     $("exp-summary").innerHTML =
       `<strong>${d.n_requirements}</strong> requirement${d.n_requirements!==1?"s":""} &nbsp;·&nbsp; ` +
       `<strong>${d.n_connections}</strong> cross-requirement connection${d.n_connections!==1?"s":""} ` +
-      `&nbsp;·&nbsp; backend: <em>${d.backend}</em> &nbsp;·&nbsp; ` +
-      `similarity: <em>${d.similarity}</em> (threshold ${d.threshold})`;
+      `&nbsp;·&nbsp; backend: <em>${esc(d.backend)}</em> &nbsp;·&nbsp; ` +
+      `similarity: <em>${esc(d.similarity)}</em> (threshold ${d.threshold})`;
   }
   // the color legend only makes sense once there's a graph to read
   $("exp-graph-legend").style.display = (d.n_requirements >= 2) ? "flex" : "none";
@@ -904,7 +904,7 @@ function renderExportGraph(d){
     const qcol = r.non_atomic ? "var(--bad)" :
                  (r.weak_words ? "#E5A020" : "var(--ok)");
     nodes += `<g><circle cx="${p.x}" cy="${p.y}" r="7" fill="${qcol}"/>
-      <title>${esc(r.id)}: ${esc(r.text)}${r.type ? " ["+r.type+"]" : ""}${r.weak_words ? " ⚠ "+r.weak_words : ""}</title>
+      <title>${esc(r.id)}: ${esc(r.text)}${r.type ? " ["+esc(r.type)+"]" : ""}${r.weak_words ? " ⚠ "+esc(r.weak_words) : ""}</title>
       <text x="${p.x}" y="${p.y - 12}" text-anchor="middle" font-size="11"
         font-weight="600" fill="#2c2c2a">${esc(r.id)}</text>
       <text x="${p.x}" y="${p.y + 18}" text-anchor="middle" font-size="9.5"

@@ -378,18 +378,33 @@ def export_request(state: GuiState, payload: dict) -> dict:
         state, items, payload, warnings)
 
     # split-aware quality table (matches the GraphML's split requirement set)
-    df = rsg.to_dataframe()
+    try:
+        df = rsg.to_dataframe()
+    except ImportError as exc:
+        raise ReqGraphError(
+            f"this feature needs pandas installed ({exc}); run "
+            f"`pip install reqgraph[io]` (pandas + openpyxl + lxml)") from exc
 
-    # build per-requirement quality rows for the GUI table
+    # build per-requirement quality rows for the GUI table. Metadata keys are
+    # namespaced exactly like the CSV (_resolve_meta_columns) so a column such as
+    # "Subject"/"Type" is preserved as attr_subject/attr_type instead of being
+    # clobbered by the parsed element -- table and CSV download stay consistent.
+    from .io_formats import _resolve_meta_columns
+    meta_cols = _resolve_meta_columns(
+        k for rid in rsg.req_ids for k in rsg.metadata.get(rid, {}))
+
     req_rows = []
     for rid in rsg.req_ids:
         g = rsg.graphs[rid]
         q = g.analysis.get("quality", {})
-        row = {"id": rid, "text": rsg.texts[rid], **rsg.metadata.get(rid, {}),
-               "type": g.analysis.get("type", ""),
-               "ears_pattern": g.analysis.get("ears_pattern", ""),
-               "weak_words": ", ".join(q.get("weak_words", [])),
-               "non_atomic": bool(q.get("non_atomic", False))}
+        meta = rsg.metadata.get(rid, {})
+        row = {"id": rid, "text": rsg.texts[rid]}
+        for k, col in meta_cols.items():
+            row[col] = meta.get(k, "")
+        row.update({"type": g.analysis.get("type", ""),
+                    "ears_pattern": g.analysis.get("ears_pattern", ""),
+                    "weak_words": ", ".join(q.get("weak_words", [])),
+                    "non_atomic": bool(q.get("non_atomic", False))})
         # add element decomposition
         bucket = {}
         for n in g.elements():
@@ -440,16 +455,20 @@ def _read_items_from_content(content: str, fmt: str, encoding: str,
                "json": ".json", "reqif": ".reqif", "xml": ".reqif"}
     suffix = ext_map.get(fmt, ".csv")
 
+    # decode the payload to bytes *before* creating the temp file, so a malformed
+    # base64 upload fails cleanly without leaving a temp file behind.
+    if encoding == "base64":
+        raw = content.split(",", 1)[1] if "," in content else content
+        try:
+            data = base64.b64decode(raw)
+        except Exception as exc:
+            raise ReqGraphError(f"could not decode the uploaded file: {exc}") from exc
+    else:
+        data = content.encode("utf-8")
+
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
         tmp_path = tmp.name
-        if encoding == "base64":
-            raw = content.split(",", 1)[1] if "," in content else content
-            try:
-                tmp.write(base64.b64decode(raw))
-            except Exception as exc:
-                raise ReqGraphError(f"could not decode the uploaded file: {exc}") from exc
-        else:
-            tmp.write(content.encode("utf-8"))
+        tmp.write(data)
 
     tabular = suffix in (".csv", ".xlsx", ".xls")
     try:

@@ -315,7 +315,14 @@ def cmd_export(args):
     # flat quality + metadata table, derived from the already-parsed (and
     # compound-split) graphs so the CSV/JSON row set matches the GraphML.
     # Built lazily so a GraphML-only export needs no pandas.
-    df = rsg.to_dataframe() if (csv_path or json_path) else None
+    df = None
+    if csv_path or json_path:
+        try:
+            df = rsg.to_dataframe()
+        except ImportError as exc:
+            sys.exit(f"error: CSV/JSON output needs pandas installed ({exc}); "
+                     f"install it with `pip install reqgraph[io]`, or export only "
+                     f"GraphML with --graphml")
 
     written = []
     if csv_path:
