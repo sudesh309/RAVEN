@@ -1,10 +1,11 @@
 """
 reqgraph command-line interface.
 
-    python -m reqgraph parse  "<requirement text>" [options]
-    python -m reqgraph batch  <in.csv|in.xlsx|in.reqif> [--out out.csv|.xlsx|.reqif|.json]
-    python -m reqgraph train  [--model NAME] [--epochs N] [--out DIR]
-    python -m reqgraph analyze <in.csv|in.xlsx|in.reqif>
+    python -m reqgraph parse    "<requirement text>" [options]
+    python -m reqgraph batch    <in.csv|in.xlsx|in.reqif> [--out out.csv|.xlsx|.reqif|.json]
+    python -m reqgraph train    [--model NAME] [--epochs N] [--out DIR]
+    python -m reqgraph analyze  <in.csv|in.xlsx|in.reqif>
+    python -m reqgraph compare  <model.sysml> <requirements.csv|.json|.txt>
 
 Run any subcommand with -h for its options.
 """
@@ -48,12 +49,17 @@ def _read_items(path):
     if not os.path.isfile(path):
         sys.exit(f"error: input file not found: {path}")
     ext = os.path.splitext(path)[1].lower()
+    def _read_plain_text(path):
+        with open(path, encoding="utf-8") as fh:
+            return [ln.strip() for ln in fh if ln.strip()]
+
     readers = {".csv": read_requirements_csv, ".json": read_requirements_json,
                ".xlsx": read_requirements_excel, ".xls": read_requirements_excel,
-               ".reqif": read_reqif, ".xml": read_reqif}
+               ".reqif": read_reqif, ".xml": read_reqif,
+               ".txt": _read_plain_text}
     if ext not in readers:
         sys.exit(f"error: unsupported input extension {ext!r}; use one of "
-                 f".csv .xlsx .xls .json .reqif .xml")
+                 f".csv .xlsx .xls .json .reqif .xml .txt")
     try:
         return readers[ext](path)
     except DataFormatError as exc:
@@ -78,6 +84,20 @@ def _validate_threshold(value):
               file=sys.stderr)
         return clamped
     return value
+
+
+def _read_sysml_model(path: str):
+    """Read a SysML v2 ``.sysml`` / ``.kerml`` file with a friendly error."""
+    from .errors import DataFormatError
+    from .sysml_parser import read_sysml
+    if not os.path.isfile(path):
+        sys.exit(f"error: SysML model file not found: {path!r}")
+    try:
+        return read_sysml(path)
+    except DataFormatError as exc:
+        sys.exit(f"error: {exc}")
+    except Exception as exc:
+        sys.exit(f"error: could not read {path}: {exc}")
 
 
 def _build_set_graph_cli(items, *, template, extractor, roles, threshold,
@@ -343,6 +363,86 @@ def cmd_export(args):
     return 0
 
 
+def cmd_compare(args):
+    """Semantically compare a SysML v2 model against a requirement set."""
+    from pathlib import Path
+    model = _read_sysml_model(args.model_file)
+    items = _read_items(args.req_file)
+    if not items:
+        sys.exit("error: no requirements found in requirement file")
+
+    ex = None
+    if args.backend == "spacy":
+        ex = SpacyExtractor()
+    elif args.backend == "bert":
+        if not args.model:
+            sys.exit("error: --backend bert requires --model")
+        ex = BertTaggerExtractor(model_dir=args.model)
+    template = TEMPLATES.get(args.template, RUPP_TEMPLATE)
+    roles = _parse_roles(args.roles)
+    threshold = _validate_threshold(args.threshold)
+
+    from .sysml_compare import compare as _compare
+    try:
+        report = _compare(model, items, roles=roles, threshold=threshold,
+                          similarity=args.similarity,
+                          embedding_model=args.embedding_model,
+                          template=template, extractor=ex)
+    except ImportError as exc:
+        sys.exit(f"error: --similarity embedding needs PyTorch + transformers "
+                 f"installed ({exc}); use --similarity lexical")
+
+    for w in report.warnings:
+        print(f"warning: {w}", file=sys.stderr)
+
+    if args.format == "json":
+        print(json.dumps(report.to_dict(), indent=2))
+    else:
+        # Human-readable summary
+        def pct(v):
+            return f"{v:.1%}"
+        print(f"\nSemantic match:    {pct(report.semantic_match)}")
+        print(f"Model coverage:    {pct(report.model_coverage)}"
+              f"  ({report.n_model_elements} model elements)")
+        print(f"Req coverage:      {pct(report.req_coverage)}"
+              f"  ({report.n_req_elements} req elements)")
+        if report.role_breakdown:
+            print("\nRole breakdown:")
+            for role_val, stats in report.role_breakdown.items():
+                print(f"  {role_val:<15}  "
+                      f"model={pct(stats['model_coverage'])}  "
+                      f"req={pct(stats['req_coverage'])}  "
+                      f"n_model={stats['n_model']}  n_req={stats['n_req']}")
+        if report.matches:
+            print(f"\nMatches ({len(report.matches)}):")
+            for m in report.matches[:20]:
+                print(f"  [{m.sysml_element.element_type}] {m.sysml_element.name}"
+                      f"  --{m.role.value} {m.score:.2f}-->  "
+                      f"[{m.req_id}] {m.req_text!r}")
+            if len(report.matches) > 20:
+                print(f"  … {len(report.matches) - 20} more (use --format json)")
+        if report.unmatched_model:
+            print(f"\nModel elements NOT covered by any requirement "
+                  f"({len(report.unmatched_model)}):")
+            for e in report.unmatched_model:
+                print(f"  [{e.element_type}] {e.name}"
+                      + (f"  (in {e.package})" if e.package else ""))
+        if report.unmatched_reqs:
+            print(f"\nRequirement elements NOT found in model "
+                  f"({len(report.unmatched_reqs)}):")
+            for req_id, role_val, txt in report.unmatched_reqs:
+                print(f"  {req_id}  [{role_val}]  {txt!r}")
+
+    if args.report:
+        Path(args.report).write_text(
+            json.dumps(report.to_dict(), indent=2), encoding="utf-8")
+        print(f"\nreport -> {args.report}")
+    if args.graphml:
+        Path(args.graphml).write_text(report.to_graphml(), encoding="utf-8")
+        print(f"graphml -> {args.graphml}")
+    return 0
+
+
 # --- argument parser -------------------------------------------------------
 
 def main(argv=None):
@@ -425,6 +525,35 @@ def main(argv=None):
     px.add_argument("--threshold",  type=float, default=0.6)
     px.add_argument("--embedding-model", default="prajjwal1/bert-tiny")
     px.set_defaults(func=cmd_export)
+
+    pcmp = sub.add_parser(
+        "compare",
+        help="semantically compare a SysML v2 model against a requirement set")
+    pcmp.add_argument("model_file",
+                      help="SysML v2 model (.sysml or .kerml)")
+    pcmp.add_argument("req_file",
+                      help="requirement file (.csv, .xlsx, .xls, .json, .reqif, .xml, "
+                           "or plain .txt)")
+    pcmp.add_argument("--threshold",  type=float, default=0.6,
+                      help="similarity cut-off 0–1 (default 0.6)")
+    pcmp.add_argument("--similarity", default="lexical", choices=["lexical", "embedding"],
+                      help="'lexical' (default, no deps) or 'embedding' (needs torch)")
+    pcmp.add_argument("--embedding-model", default="prajjwal1/bert-tiny",
+                      help="HuggingFace model for embedding similarity")
+    pcmp.add_argument("--roles", default="SUBJECT,PROCESS,OBJECT,CONDITION",
+                      help="comma-separated semantic roles to compare "
+                           "(default SUBJECT,PROCESS,OBJECT,CONDITION)")
+    pcmp.add_argument("--format", default="text", choices=["text", "json"],
+                      help="output format: human-readable text (default) or JSON")
+    pcmp.add_argument("--report",  metavar="PATH", default=None,
+                      help="write full JSON report to this file")
+    pcmp.add_argument("--graphml", metavar="PATH", default=None,
+                      help="write bipartite match GraphML to this file")
+    pcmp.add_argument("--template", default="IREB-Rupp")
+    pcmp.add_argument("--backend",  default="rules", choices=["rules", "spacy", "bert"])
+    pcmp.add_argument("--model",    default=None,
+                      help="saved tagger dir (for --backend bert)")
+    pcmp.set_defaults(func=cmd_compare)
 
     pc = sub.add_parser("connections",
                         help="find similar SUBJECT/OBJECT elements across a "

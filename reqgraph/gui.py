@@ -25,6 +25,15 @@ POST /api/export      {format, content, encoding?, template?, backend?,
                       + cross-requirement connection detection, return all outputs.
                       ``content`` is the raw file text (UTF-8) or base64 for binary
                       Excel files. ``format`` is one of csv/json/reqif/excel.
+POST /api/compare     {model_content, req_content, req_format?, template?, backend?,
+                       similarity?, threshold?, roles?} ->
+                      {semantic_match, model_coverage, req_coverage, n_model_elements,
+                       n_req_elements, role_breakdown, matches, unmatched_model,
+                       unmatched_reqs, graphml, mermaid, warnings, error?}
+                      -- compare a SysML v2 model against a requirement set and
+                      report the semantic match percentage.  ``model_content`` is
+                      the raw SysML v2 text; ``req_content`` is the requirement
+                      text (plain / CSV / JSON as indicated by ``req_format``).
 
 Design notes
 ------------
@@ -436,6 +445,98 @@ def export_request(state: GuiState, payload: dict) -> dict:
     }
 
 
+def compare_request(state: GuiState, payload: dict) -> dict:
+    """Handle one /api/compare payload.
+
+    Parses a SysML v2 model from ``model_content`` and a requirement set from
+    ``req_content``, runs role-bucketed semantic similarity, and returns the
+    comparison report as a JSON-serialisable dict.
+
+    Payload keys
+    ------------
+    model_content : str
+        Raw SysML v2 textual notation.
+    req_content : str
+        Requirement text.  Plain text (one per line) is the default; set
+        ``req_format`` to ``"csv"`` or ``"json"`` for structured formats.
+    req_format : str, optional
+        Format of ``req_content``: ``""``/``"plain"``/``"lines"`` (default),
+        ``"csv"``, ``"json"``, ``"reqif"``.
+    threshold : float, optional
+        Similarity cut-off 0–1 (default 0.6).
+    similarity : str, optional
+        ``"lexical"`` (default) or ``"embedding"``.
+    roles : list[str], optional
+        Semantic roles to compare (default SUBJECT, PROCESS, OBJECT, CONDITION).
+    template / backend : str, optional
+        Requirement parsing template / extraction backend.
+    """
+    from .sysml_parser import parse_sysml
+    from .sysml_compare import compare as _compare
+
+    model_content = payload.get("model_content", "")
+    req_content = payload.get("req_content", "")
+
+    if not model_content or not str(model_content).strip():
+        raise ReqGraphError(
+            "please paste a SysML v2 model in the left panel")
+    if not req_content or not str(req_content).strip():
+        raise ReqGraphError(
+            "please paste requirements (one per line, or CSV/JSON) in the "
+            "right panel")
+
+    warnings: list = []
+
+    # Parse the SysML model
+    try:
+        model = parse_sysml(str(model_content), source_path="<pasted model>")
+    except Exception as exc:
+        raise ReqGraphError(f"could not parse SysML model: {exc}") from exc
+
+    # Parse the requirements
+    fmt = (payload.get("req_format") or "").lower().strip()
+    items = _read_items_from_content(req_content, fmt, "utf-8", warnings)
+    if not items:
+        raise ReqGraphError(
+            "no requirements found — check the content and format selector")
+
+    # Build comparison
+    template = TEMPLATES.get(payload.get("template", ""), RUPP_TEMPLATE)
+    backend = payload.get("backend", "rules")
+    similarity = payload.get("similarity", "lexical")
+    if similarity not in ("lexical", "embedding"):
+        raise ReqGraphError(
+            f"unknown similarity {similarity!r}; use 'lexical' or 'embedding'")
+    threshold = _coerce_threshold(payload, warnings)
+
+    roles_raw = payload.get("roles") or ["SUBJECT", "PROCESS", "OBJECT", "CONDITION"]
+    try:
+        roles = tuple(Role(r) for r in roles_raw)
+    except ValueError as exc:
+        raise ReqGraphError(
+            f"unknown role {exc}; choose from "
+            f"{', '.join(r.value for r in Role)}") from exc
+
+    embedding_model = payload.get("embedding_model", "prajjwal1/bert-tiny")
+
+    try:
+        report = _compare(model, items, roles=roles, threshold=threshold,
+                          similarity=similarity, embedding_model=embedding_model,
+                          template=template,
+                          extractor=state.extractor(backend))
+    except ImportError as exc:
+        raise ReqGraphError(
+            "the 'embedding' similarity needs PyTorch + transformers installed "
+            f"({exc}); switch Similarity back to 'lexical'") from exc
+
+    warnings.extend(report.warnings)
+
+    result = report.to_dict()
+    result["graphml"] = report.to_graphml()
+    result["mermaid"] = report.to_mermaid()
+    return result
+
+
 def _read_items_from_content(content: str, fmt: str, encoding: str,
                              warnings: list) -> list:
     """Turn pasted text or an uploaded file into ``(id, text, meta)`` items.
@@ -539,7 +640,8 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_error(404)
 
     def do_POST(self):
-        if self.path not in ("/api/parse", "/api/connections", "/api/export"):
+        if self.path not in ("/api/parse", "/api/connections",
+                             "/api/export", "/api/compare"):
             self.send_error(404)
             return
         try:
@@ -549,6 +651,8 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send_json(parse_request(self.state, payload))
             elif self.path == "/api/connections":
                 self._send_json(connections_request(self.state, payload))
+            elif self.path == "/api/compare":
+                self._send_json(compare_request(self.state, payload))
             else:
                 self._send_json(export_request(self.state, payload))
         except ReqGraphError as exc:
