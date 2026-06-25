@@ -197,6 +197,32 @@
   .ont-chip .cnt{font-weight:700}
   .ont-map li{margin-bottom:5px;line-height:1.5}
   .ont-map .arr{color:var(--accent);font-weight:700;margin:0 5px}
+  /* use-case storyline — three engineering roles, linked to the tools */
+  html{scroll-behavior:smooth}
+  #story .pintro{font-size:12.5px;color:var(--muted);margin:0 0 14px;line-height:1.55}
+  #story .pintro b{color:var(--text)}
+  .lanes{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  @media(max-width:900px){.lanes{grid-template-columns:1fr}}
+  .lane{border:1px solid var(--border);border-radius:11px;padding:14px 15px;
+    background:var(--bg);display:flex;flex-direction:column;gap:9px}
+  .lane .who{display:flex;align-items:center;gap:10px}
+  .lane .who .av{width:32px;height:32px;border-radius:8px;flex:none;font-size:17px;
+    display:inline-flex;align-items:center;justify-content:center}
+  .lane .who .nm{font-weight:650;font-size:13.5px;line-height:1.2}
+  .lane .who .gl{font-size:11.5px;color:var(--muted)}
+  .lane .step-tag{font-size:10.5px;font-weight:600;letter-spacing:.03em;
+    color:var(--accent);background:var(--accent-soft);border-radius:99px;
+    padding:1px 9px;align-self:flex-start}
+  .lane ul{margin:0;padding-left:17px;font-size:12.5px;line-height:1.5}
+  .lane ul li{margin-bottom:6px}
+  .lane a.jump{color:var(--accent);font-weight:600;text-decoration:none;
+    border-bottom:1px dashed var(--accent);white-space:nowrap}
+  .lane a.jump:hover{background:var(--accent-soft)}
+  .lane .out{font-size:12px;color:var(--ok);background:var(--ok-soft);
+    border:1px solid var(--ok-soft);border-radius:8px;padding:7px 10px;
+    margin-top:auto;line-height:1.45}
+  .lane .out b{color:var(--ok)}
+  .story-foot{font-size:12.5px;color:var(--muted);margin:14px 0 0;line-height:1.55}
 </style>
 </head>
 <body>
@@ -234,7 +260,88 @@
           <span class="tag now">Download</span></div></li>
     </ol>
   </section>
-  <section class="card">
+
+  <section class="card" id="story">
+    <h2>Use case — one drone, three engineers</h2>
+    <p class="pintro"><b>Scenario:</b> a team is specifying an autonomous inspection
+      drone. The same requirement set flows through RAVEN's four steps, but each
+      engineer owns a different slice of the loop. The sample files in
+      <code>samples/drone/</code> (a 4-level ReqIF set, a SysML&nbsp;v2 model and its
+      knowledge graph) are exactly this story. Click an action to jump to its tool.</p>
+    <div class="lanes">
+
+      <div class="lane">
+        <div class="who">
+          <span class="av" style="background:var(--accent-soft)">🖊️</span>
+          <div><div class="nm">Requirements Engineer</div>
+            <div class="gl">“A clean, atomic, testable baseline.”</div></div>
+        </div>
+        <span class="step-tag">Owns steps 1–2</span>
+        <ul>
+          <li>Imports the 40-requirement, 4-level drone <b>ReqIF</b> and scores its
+            quality — <a class="jump" href="#tool-import">Import &amp; analyze</a>.</li>
+          <li>Opens each requirement's <b>IREB roles</b> and confirms the graph
+            regenerates the exact text — <a class="jump" href="#tool-parse">Parse</a>.</li>
+          <li>Fixes weak words (“user-friendly”), splits non-atomic
+            “shall&nbsp;X <i>and</i>&nbsp;Y”, adds the missing EARS condition.</li>
+          <li>Merges near-duplicates that share a subject/object —
+            <a class="jump" href="#tool-connect">Find connections</a>.</li>
+        </ul>
+        <div class="out"><b>Hands over:</b> an unambiguous, de-duplicated baseline
+          where every requirement is atomic and verifiable.</div>
+      </div>
+
+      <div class="lane">
+        <div class="who">
+          <span class="av" style="background:var(--ok-soft)">🏗️</span>
+          <div><div class="nm">Systems Architect</div>
+            <div class="gl">“An architecture that realises every requirement.”</div></div>
+        </div>
+        <span class="step-tag">Owns step 2 (design side)</span>
+        <ul>
+          <li>Models the drone in <b>SysML</b> — structural blocks plus behavioral
+            actions and states — and exports the <b>knowledge graph</b> as Turtle.</li>
+          <li>Compares the SysML&nbsp;v2 model to the baseline for semantic match,
+            model coverage and requirement coverage —
+            <a class="jump" href="#tool-compare2">Compare v2</a>.</li>
+          <li>For legacy Cameo/MagicDraw <b>XMI</b>, runs the context-aware,
+            neighborhood-scored compare —
+            <a class="jump" href="#tool-compare1">Compare v1</a>.</li>
+        </ul>
+        <div class="out"><b>Surfaces:</b> requirements with no design element, and
+          design elements with no driving requirement (gold-plating).</div>
+      </div>
+
+      <div class="lane">
+        <div class="who">
+          <span class="av" style="background:#FBF3E2">✅</span>
+          <div><div class="nm">V&amp;V Engineer</div>
+            <div class="gl">“Proof each requirement is satisfied &amp; verifiable.”</div></div>
+        </div>
+        <span class="step-tag">Owns steps 3–4</span>
+        <ul>
+          <li>Turns the coverage <b>gaps</b> into a verification-risk list — every
+            uncovered requirement becomes a test or analysis action —
+            <a class="jump" href="#tool-compare2">Compare results</a>.</li>
+          <li>Checks <b>satisfy/refine</b> traceability (the satisfaction bonus):
+            requirements with a model satisfy link are traceable; the rest are
+            flagged — <a class="jump" href="#tool-compare1">Compare v1</a>.</li>
+          <li>Validates each suggestion (<b>human in the loop</b>), then exports the
+            signed-off set + traceability graph —
+            <a class="jump" href="#tool-import">download outputs</a>.</li>
+        </ul>
+        <div class="out"><b>Delivers:</b> a validated spec with a full
+          requirement → design → verification trace, ready for sign-off.</div>
+      </div>
+
+    </div>
+    <p class="story-foot">Together the three roles close RAVEN's loop:
+      <b>upload → check → validate → generate</b>. The requirements engineer cleans
+      the input, the architect proves the design covers it, and the V&amp;V engineer
+      validates and signs off the final, machine-readable specification.</p>
+  </section>
+
+  <section class="card" id="tool-parse">
     <h2><span class="step">1</span>Parse a requirement</h2>
     <p class="lead">Type or load one requirement. It is split into IREB roles
       (<b>subject</b>, <b>process</b>, <b>object</b>, <b>condition</b>…) and drawn
@@ -306,7 +413,7 @@
       <tbody id="tbody"></tbody></table>
   </section>
 
-  <section class="card">
+  <section class="card" id="tool-connect">
     <h2><span class="step">2</span>Find connections in a set</h2>
     <p class="lead">Paste one requirement per line. reqgraph parses each, then links
       any two that share a similar <b>subject</b> or <b>object</b> — a fast way to
@@ -365,7 +472,7 @@
   </section>
 
   <!-- ── Import & analyze ───────────────────────────────────────────── -->
-  <section class="card">
+  <section class="card" id="tool-import">
     <h2><span class="step">3</span>Import &amp; analyze a set</h2>
     <p class="lead">The full pipeline over a whole document: parse every
       requirement, score its <b>quality</b> (weak words, atomicity, EARS pattern,
@@ -487,7 +594,7 @@
   </section>
 
   <!-- ── Compare Model vs Requirements ──────────────────────────── -->
-  <section class="card">
+  <section class="card" id="tool-compare2">
     <h2><span class="step">4</span>Compare a SysML v2 model</h2>
     <p class="lead">Check how well a <b>SysML v2 model</b> and your <b>requirements</b>
       line up. Model elements (parts, actions, states, attributes) are matched to the
@@ -601,7 +708,7 @@
   </section>
 
   <!-- ── Compare SysML v1 Model (XMI / Turtle) vs Requirements ──────────── -->
-  <section class="card">
+  <section class="card" id="tool-compare1">
     <h2><span class="step">5</span>Compare a SysML v1 model</h2>
     <p class="lead">For older <b>SysML v1</b> models exported as <b>XMI</b> (MagicDraw,
       Cameo, Papyrus) or <b>Turtle/RDF</b>. Unlike step 4, each element is scored by
