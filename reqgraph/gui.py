@@ -20,11 +20,31 @@ POST /api/connections  {texts: [...], template?, backend?, similarity?, threshol
 POST /api/export      {format, content, encoding?, template?, backend?,
                        similarity?, threshold?, roles?} ->
                       {requirements, connections, n_requirements, n_connections,
-                       mermaid, dot, graphml, turtle, cypher, csv_data, error?}
+                       mermaid, dot, graphml, turtle, req_turtle, cypher,
+                       csv_data, error?}
                       -- import a file (CSV/Excel/JSON/ReqIF), run quality analysis
                       + cross-requirement connection detection, return all outputs.
                       ``content`` is the raw file text (UTF-8) or base64 for binary
                       Excel files. ``format`` is one of csv/json/reqif/excel.
+POST /api/compare     {model_content, req_content, req_format?, template?, backend?,
+                       similarity?, threshold?, roles?} ->
+                      {semantic_match, model_coverage, req_coverage, n_model_elements,
+                       n_req_elements, role_breakdown, matches, unmatched_model,
+                       unmatched_reqs, graphml, mermaid, warnings, error?}
+                      -- compare a SysML v2 model against a requirement set and
+                      report the semantic match percentage.  ``model_content`` is
+                      the raw SysML v2 text; ``req_content`` is the requirement
+                      text (plain / CSV / JSON as indicated by ``req_format``).
+POST /api/compare-v1  {model_content, model_format?, req_content, req_format?,
+                       context_hops?, threshold?, similarity?, roles?,
+                       template?, backend?} ->
+                      {semantic_match, model_coverage, req_coverage,
+                       role_breakdown, matches, unmatched_model, unmatched_reqs,
+                       graphml, mermaid, kg_graphml, model_turtle,
+                       ontology_mermaid, ontology_graphml, warnings, error?}
+                      -- context-aware comparison of a SysML v1 XMI/Turtle
+                      model against a requirement set using graph neighborhood
+                      context (BFS up to context_hops) + satisfaction bonus.
 
 Design notes
 ------------
@@ -156,6 +176,57 @@ class GuiState:
 # payload builders (pure functions, unit-testable)
 # ---------------------------------------------------------------------------
 
+# value the GUI sends for "paste plain requirements, one per line"
+_PLAIN_FORMATS = {"lines", "text", "plain", "plaintext", ""}
+
+
+def _coerce_threshold(payload: dict, warnings: list) -> float:
+    """Parse + clamp the similarity threshold to [0, 1], warning if adjusted."""
+    try:
+        threshold = float(payload.get("threshold", 0.6))
+    except (TypeError, ValueError):
+        warnings.append("threshold was not a number; using the default 0.6")
+        return 0.6
+    if threshold < 0 or threshold > 1:
+        clamped = min(1.0, max(0.0, threshold))
+        warnings.append(f"threshold {threshold:g} is outside 0–1; clamped to {clamped:g}")
+        return clamped
+    return threshold
+
+
+def _coerce_roles(payload: dict):
+    role_names = payload.get("roles") or ["SUBJECT", "OBJECT"]
+    try:
+        return tuple(Role(r) for r in role_names)
+    except ValueError as exc:
+        raise ReqGraphError(
+            f"unknown role {exc}; choose from "
+            f"{', '.join(r.value for r in Role)}") from exc
+
+
+def _build_set_graph(state, items, payload, warnings):
+    """Shared builder for the connections/export endpoints with friendly errors
+    for the optional embedding backend."""
+    template = TEMPLATES.get(payload.get("template", ""), RUPP_TEMPLATE)
+    backend = payload.get("backend", "rules")
+    similarity = payload.get("similarity", "lexical")
+    if similarity not in ("lexical", "embedding"):
+        raise ReqGraphError(
+            f"unknown similarity {similarity!r}; use 'lexical' or 'embedding'")
+    threshold = _coerce_threshold(payload, warnings)
+    roles = _coerce_roles(payload)
+    try:
+        rsg = build_requirement_set_graph(
+            items, template=template, extractor=state.extractor(backend),
+            roles=roles, threshold=threshold, similarity=similarity)
+    except ImportError as exc:
+        raise ReqGraphError(
+            "the 'embedding' similarity needs PyTorch + transformers installed "
+            f"({exc}); switch Similarity back to 'lexical', which needs no extra "
+            "packages") from exc
+    return rsg, template, backend, similarity, threshold
+
+
 def _graph_to_tree(g) -> Optional[dict]:
     """Nested semantic tree (ROOT down), children sorted in text order."""
     if not g.root_id:
@@ -275,19 +346,9 @@ def connections_request(state: GuiState, payload: dict) -> dict:
         raise ReqGraphError("please enter at least one requirement (one per line)")
     items = [t for t in texts if isinstance(t, str) and t.strip()]
 
-    template = TEMPLATES.get(payload.get("template", ""), RUPP_TEMPLATE)
-    backend = payload.get("backend", "rules")
-    similarity = payload.get("similarity", "lexical")
-    threshold = float(payload.get("threshold", 0.6))
-    role_names = payload.get("roles") or ["SUBJECT", "OBJECT"]
-    try:
-        roles = tuple(Role(r) for r in role_names)
-    except ValueError as exc:
-        raise ReqGraphError(f"unknown role: {exc}") from exc
-
-    rsg = build_requirement_set_graph(
-        items, template=template, extractor=state.extractor(backend),
-        roles=roles, threshold=threshold, similarity=similarity)
+    warnings: list = []
+    rsg, template, backend, similarity, threshold = _build_set_graph(
+        state, items, payload, warnings)
 
     return {
         "requirements": [{"id": rid, "text": rsg.texts[rid]} for rid in rsg.req_ids],
@@ -307,6 +368,7 @@ def connections_request(state: GuiState, payload: dict) -> dict:
         "backend": backend,
         "similarity": similarity,
         "threshold": threshold,
+        "warnings": warnings,
     }
 
 
@@ -318,81 +380,51 @@ def export_request(state: GuiState, payload: dict) -> dict:
     detection, and returns the full analysis plus download-ready blobs
     (csv_data string, graphml string, etc.).
     """
-    from .io_formats import (read_requirements_csv, read_requirements_excel,
-                             read_requirements_json, read_reqif,
-                             requirements_to_dataframe)
-
     content = payload.get("content", "")
     fmt = (payload.get("format") or "").lower().strip()
     encoding = (payload.get("encoding") or "utf-8").lower().strip()
 
     if not content or not str(content).strip():
-        raise ReqGraphError("please provide file content")
+        raise ReqGraphError("nothing to analyze — paste some text or choose a file")
 
-    # write content to a temp file so the existing readers can parse it
-    ext_map = {"csv": ".csv", "excel": ".xlsx", "xlsx": ".xlsx", "xls": ".xls",
-               "json": ".json", "reqif": ".reqif", "xml": ".reqif"}
-    suffix = ext_map.get(fmt, ".csv")
-
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        tmp_path = tmp.name
-        if encoding == "base64":
-            # strip data-URL prefix if present (e.g. data:application/...;base64,)
-            raw = content
-            if "," in raw:
-                raw = raw.split(",", 1)[1]
-            tmp.write(base64.b64decode(raw))
-        else:
-            tmp.write(content.encode("utf-8"))
-
-    try:
-        if suffix in (".xlsx", ".xls"):
-            items = read_requirements_excel(tmp_path)
-        elif suffix == ".json":
-            items = read_requirements_json(tmp_path)
-        elif suffix == ".reqif":
-            items = read_reqif(tmp_path)
-        else:
-            items = read_requirements_csv(tmp_path)
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+    warnings: list = []
+    items = _read_items_from_content(content, fmt, encoding, warnings)
 
     if not items:
-        raise ReqGraphError("no requirements found in the uploaded file")
+        raise ReqGraphError(
+            "no requirements found — the file/text parsed but contained no rows")
 
-    template = TEMPLATES.get(payload.get("template", ""), RUPP_TEMPLATE)
-    backend = payload.get("backend", "rules")
-    similarity = payload.get("similarity", "lexical")
-    threshold = float(payload.get("threshold", 0.6))
-    role_names = payload.get("roles") or ["SUBJECT", "OBJECT"]
+    rsg, template, backend, similarity, threshold = _build_set_graph(
+        state, items, payload, warnings)
+
+    # split-aware quality table (matches the GraphML's split requirement set)
     try:
-        roles = tuple(Role(r) for r in role_names)
-    except ValueError as exc:
-        raise ReqGraphError(f"unknown role: {exc}") from exc
+        df = rsg.to_dataframe()
+    except ImportError as exc:
+        raise ReqGraphError(
+            f"this feature needs pandas installed ({exc}); run "
+            f"`pip install reqgraph[io]` (pandas + openpyxl + lxml)") from exc
 
-    rsg = build_requirement_set_graph(
-        items, template=template, extractor=state.extractor(backend),
-        roles=roles, threshold=threshold, similarity=similarity)
+    # build per-requirement quality rows for the GUI table. Metadata keys are
+    # namespaced exactly like the CSV (_resolve_meta_columns) so a column such as
+    # "Subject"/"Type" is preserved as attr_subject/attr_type instead of being
+    # clobbered by the parsed element -- table and CSV download stay consistent.
+    from .io_formats import _resolve_meta_columns
+    meta_cols = _resolve_meta_columns(
+        k for rid in rsg.req_ids for k in rsg.metadata.get(rid, {}))
 
-    for rid in rsg.req_ids:
-        enrich(rsg.graphs[rid])
-
-    df = requirements_to_dataframe(items, template=template,
-                                   extractor=state.extractor(backend))
-
-    # build per-requirement quality rows for the GUI table
     req_rows = []
     for rid in rsg.req_ids:
         g = rsg.graphs[rid]
         q = g.analysis.get("quality", {})
-        row = {"id": rid, "text": rsg.texts[rid], **rsg.metadata.get(rid, {}),
-               "type": g.analysis.get("type", ""),
-               "ears_pattern": g.analysis.get("ears_pattern", ""),
-               "weak_words": ", ".join(q.get("weak_words", [])),
-               "non_atomic": bool(q.get("non_atomic", False))}
+        meta = rsg.metadata.get(rid, {})
+        row = {"id": rid, "text": rsg.texts[rid]}
+        for k, col in meta_cols.items():
+            row[col] = meta.get(k, "")
+        row.update({"type": g.analysis.get("type", ""),
+                    "ears_pattern": g.analysis.get("ears_pattern", ""),
+                    "weak_words": ", ".join(q.get("weak_words", [])),
+                    "non_atomic": bool(q.get("non_atomic", False))})
         # add element decomposition
         bucket = {}
         for n in g.elements():
@@ -414,13 +446,278 @@ def export_request(state: GuiState, payload: dict) -> dict:
         "dot": rsg.to_dot(),
         "graphml": rsg.to_element_graphml(),
         "turtle": rsg.to_turtle(),
+        "req_turtle": rsg.to_req_turtle(),
         "cypher": rsg.to_cypher(),
         "csv_data": df.to_csv(index=False),
         "template": template.name,
         "backend": backend,
         "similarity": similarity,
         "threshold": threshold,
+        "warnings": warnings,
     }
+
+
+def compare_request(state: GuiState, payload: dict) -> dict:
+    """Handle one /api/compare payload.
+
+    Parses a SysML v2 model from ``model_content`` and a requirement set from
+    ``req_content``, runs role-bucketed semantic similarity, and returns the
+    comparison report as a JSON-serialisable dict.
+
+    Payload keys
+    ------------
+    model_content : str
+        Raw SysML v2 textual notation.
+    req_content : str
+        Requirement text.  Plain text (one per line) is the default; set
+        ``req_format`` to ``"csv"`` or ``"json"`` for structured formats.
+    req_format : str, optional
+        Format of ``req_content``: ``""``/``"plain"``/``"lines"`` (default),
+        ``"csv"``, ``"json"``, ``"reqif"``.
+    threshold : float, optional
+        Similarity cut-off 0–1 (default 0.6).
+    similarity : str, optional
+        ``"lexical"`` (default) or ``"embedding"``.
+    roles : list[str], optional
+        Semantic roles to compare (default SUBJECT, PROCESS, OBJECT, CONDITION).
+    template / backend : str, optional
+        Requirement parsing template / extraction backend.
+    """
+    from .sysml_parser import parse_sysml
+    from .sysml_compare import compare as _compare
+
+    model_content = payload.get("model_content", "")
+    req_content = payload.get("req_content", "")
+
+    if not model_content or not str(model_content).strip():
+        raise ReqGraphError(
+            "please paste a SysML v2 model in the left panel")
+    if not req_content or not str(req_content).strip():
+        raise ReqGraphError(
+            "please paste requirements (one per line, or CSV/JSON) in the "
+            "right panel")
+
+    warnings: list = []
+
+    # Parse the SysML model
+    try:
+        model = parse_sysml(str(model_content), source_path="<pasted model>")
+    except Exception as exc:
+        raise ReqGraphError(f"could not parse SysML model: {exc}") from exc
+
+    # Parse the requirements
+    fmt = (payload.get("req_format") or "").lower().strip()
+    items = _read_items_from_content(req_content, fmt, "utf-8", warnings)
+    if not items:
+        raise ReqGraphError(
+            "no requirements found — check the content and format selector")
+
+    # Build comparison
+    template = TEMPLATES.get(payload.get("template", ""), RUPP_TEMPLATE)
+    backend = payload.get("backend", "rules")
+    similarity = payload.get("similarity", "lexical")
+    if similarity not in ("lexical", "embedding"):
+        raise ReqGraphError(
+            f"unknown similarity {similarity!r}; use 'lexical' or 'embedding'")
+    threshold = _coerce_threshold(payload, warnings)
+
+    roles_raw = payload.get("roles") or ["SUBJECT", "PROCESS", "OBJECT", "CONDITION"]
+    try:
+        roles = tuple(Role(r) for r in roles_raw)
+    except ValueError as exc:
+        raise ReqGraphError(
+            f"unknown role {exc}; choose from "
+            f"{', '.join(r.value for r in Role)}") from exc
+
+    embedding_model = payload.get("embedding_model", "prajjwal1/bert-tiny")
+
+    try:
+        report = _compare(model, items, roles=roles, threshold=threshold,
+                          similarity=similarity, embedding_model=embedding_model,
+                          template=template,
+                          extractor=state.extractor(backend))
+    except ImportError as exc:
+        raise ReqGraphError(
+            "the 'embedding' similarity needs PyTorch + transformers installed "
+            f"({exc}); switch Similarity back to 'lexical'") from exc
+
+    warnings.extend(report.warnings)
+
+    result = report.to_dict()
+    result["graphml"] = report.to_graphml()
+    result["mermaid"] = report.to_mermaid()
+    return result
+
+
+def compare_v1_request(state: GuiState, payload: dict) -> dict:
+    """Handle one /api/compare-v1 payload.
+
+    Parses a SysML v1 XMI or Turtle model from ``model_content`` and a
+    requirement set from ``req_content``, runs context-aware semantic
+    comparison (BFS neighborhood context + satisfaction bonus), and returns
+    the full V1ComparisonReport as a JSON-serialisable dict plus KG exports.
+
+    Payload keys
+    ------------
+    model_content : str
+        Raw SysML v1 XMI or Turtle/RDF text.
+    model_format : str, optional
+        ``"xmi"`` (default) or ``"turtle"``; if omitted, auto-detected.
+    req_content : str
+        Requirement text (plain / CSV / JSON as indicated by ``req_format``).
+    req_format : str, optional
+        Format of ``req_content`` (default plain).
+    context_hops : int, optional
+        BFS depth for neighborhood context building (default 2).
+    threshold : float, optional
+        Confidence cut-off 0–1 (default 0.5).
+    similarity : str, optional
+        ``"lexical"`` (default) or ``"embedding"``.
+    roles : list[str], optional
+        Semantic roles to compare.
+    template / backend : str, optional
+        Requirement parsing template / extraction backend.
+    """
+    from .sysml_v1_parser import parse_sysml_v1
+    from .sysml_v1_compare import compare_v1 as _compare_v1
+
+    model_content = payload.get("model_content", "")
+    req_content = payload.get("req_content", "")
+
+    if not model_content or not str(model_content).strip():
+        raise ReqGraphError(
+            "please paste a SysML v1 XMI or Turtle model in the left panel")
+    if not req_content or not str(req_content).strip():
+        raise ReqGraphError(
+            "please paste requirements (one per line, or CSV/JSON) in the right panel")
+
+    warnings: list = []
+
+    # Parse the SysML v1 model (honor the format hint from the XMI/Turtle tab;
+    # falls back to content auto-detection when the hint is absent/invalid)
+    model_fmt = (payload.get("model_format") or "").lower().strip()
+    try:
+        model = parse_sysml_v1(str(model_content), source_path="<pasted model>",
+                               fmt=model_fmt or None)
+    except Exception as exc:
+        raise ReqGraphError(f"could not parse SysML v1 model: {exc}") from exc
+
+    # Parse the requirements
+    fmt = (payload.get("req_format") or "").lower().strip()
+    items = _read_items_from_content(req_content, fmt, "utf-8", warnings)
+    if not items:
+        raise ReqGraphError(
+            "no requirements found — check the content and format selector")
+
+    # Build comparison
+    template = TEMPLATES.get(payload.get("template", ""), RUPP_TEMPLATE)
+    backend = payload.get("backend", "rules")
+    similarity = payload.get("similarity", "lexical")
+    if similarity not in ("lexical", "embedding"):
+        raise ReqGraphError(
+            f"unknown similarity {similarity!r}; use 'lexical' or 'embedding'")
+    threshold = _coerce_threshold(payload, warnings)
+
+    try:
+        context_hops = int(payload.get("context_hops", 2))
+        context_hops = max(0, min(5, context_hops))
+    except (TypeError, ValueError):
+        context_hops = 2
+
+    roles_raw = payload.get("roles") or ["SUBJECT", "PROCESS", "OBJECT", "CONDITION"]
+    try:
+        roles = tuple(Role(r) for r in roles_raw)
+    except ValueError as exc:
+        raise ReqGraphError(
+            f"unknown role {exc}; choose from "
+            f"{', '.join(r.value for r in Role)}") from exc
+
+    embedding_model = payload.get("embedding_model", "prajjwal1/bert-tiny")
+
+    try:
+        report = _compare_v1(model, items, roles=roles, threshold=threshold,
+                             similarity=similarity,
+                             embedding_model=embedding_model,
+                             context_hops=context_hops,
+                             template=template,
+                             extractor=state.extractor(backend))
+    except ImportError as exc:
+        raise ReqGraphError(
+            "the 'embedding' similarity needs PyTorch + transformers installed "
+            f"({exc}); switch Similarity back to 'lexical'") from exc
+
+    warnings.extend(report.warnings)
+
+    result = report.to_dict()
+    result["graphml"] = report.to_graphml()
+    result["mermaid"] = report.to_mermaid()
+    result["kg_graphml"] = model.to_graphml()
+    result["model_turtle"] = model.to_turtle()
+    if report.ontology_diff:
+        result["ontology_mermaid"] = report.ontology_diff.to_mermaid()
+        result["ontology_graphml"] = report.ontology_diff.to_graphml()
+    return result
+
+
+def _read_items_from_content(content: str, fmt: str, encoding: str,
+                             warnings: list) -> list:
+    """Turn pasted text or an uploaded file into ``(id, text, meta)`` items.
+
+    ``fmt`` of ``lines``/``text``/``plain`` (or empty) treats the content as one
+    requirement per non-blank line — the most natural thing to paste. Otherwise
+    the content is written to a temp file and handed to the matching reader.
+    """
+    from .io_formats import (read_requirements_csv, read_requirements_excel,
+                             read_requirements_json, read_reqif)
+
+    # plain text: one requirement per line, no header required
+    if fmt in _PLAIN_FORMATS and encoding != "base64":
+        return [ln.strip() for ln in content.splitlines() if ln.strip()]
+
+    ext_map = {"csv": ".csv", "excel": ".xlsx", "xlsx": ".xlsx", "xls": ".xls",
+               "json": ".json", "reqif": ".reqif", "xml": ".reqif"}
+    suffix = ext_map.get(fmt, ".csv")
+
+    # decode the payload to bytes *before* creating the temp file, so a malformed
+    # base64 upload fails cleanly without leaving a temp file behind.
+    if encoding == "base64":
+        raw = content.split(",", 1)[1] if "," in content else content
+        try:
+            data = base64.b64decode(raw)
+        except Exception as exc:
+            raise ReqGraphError(f"could not decode the uploaded file: {exc}") from exc
+    else:
+        data = content.encode("utf-8")
+
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp_path = tmp.name
+        tmp.write(data)
+
+    tabular = suffix in (".csv", ".xlsx", ".xls")
+    try:
+        if suffix in (".xlsx", ".xls"):
+            return read_requirements_excel(tmp_path)
+        if suffix == ".json":
+            return read_requirements_json(tmp_path)
+        if suffix == ".reqif":
+            return read_reqif(tmp_path)
+        return read_requirements_csv(tmp_path)
+    except Exception as exc:
+        # The #1 mistake is pasting plain requirements while Format is CSV/Excel
+        # (a missing 'text' column, or commas in the text breaking the parse).
+        if tabular:
+            raise ReqGraphError(
+                f"could not read this as {fmt or 'CSV'}: {exc}. "
+                f"If you pasted plain requirements (one per line), set the Format "
+                f"selector to 'Plain text'. For CSV/Excel, the first row must be a "
+                f"header containing a 'text' column (and optionally 'id').") from exc
+        raise ReqGraphError(
+            f"could not parse the {fmt or 'input'} content: {exc}") from exc
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -465,7 +762,8 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_error(404)
 
     def do_POST(self):
-        if self.path not in ("/api/parse", "/api/connections", "/api/export"):
+        if self.path not in ("/api/parse", "/api/connections",
+                             "/api/export", "/api/compare", "/api/compare-v1"):
             self.send_error(404)
             return
         try:
@@ -475,6 +773,10 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send_json(parse_request(self.state, payload))
             elif self.path == "/api/connections":
                 self._send_json(connections_request(self.state, payload))
+            elif self.path == "/api/compare":
+                self._send_json(compare_request(self.state, payload))
+            elif self.path == "/api/compare-v1":
+                self._send_json(compare_v1_request(self.state, payload))
             else:
                 self._send_json(export_request(self.state, payload))
         except ReqGraphError as exc:

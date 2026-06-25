@@ -231,6 +231,23 @@ class RequirementSetGraph:
         """
         from .quality import enrich as _enrich
 
+        # Pre-assign every node a unique id. REQ nodes keep their requirement id;
+        # ELEMENT nodes are namespaced {req_id}__{node_id}. Track used ids so a
+        # (pathological) requirement id equal to another's element id can't yield
+        # a duplicate GraphML node id -- the map is shared by HAS_ELEMENT and
+        # SIMILAR_* edges so every edge endpoint resolves to a real node.
+        used = set(self.req_ids)
+        elem_id: dict = {}
+        for rid in self.req_ids:
+            for n in self.graphs[rid].elements():
+                if n.role.value == "GLUE":
+                    continue
+                cand = f"{rid}__{n.id}"
+                while cand in used:
+                    cand += "_"
+                used.add(cand)
+                elem_id[(rid, n.id)] = cand
+
         ns = "http://graphml.graphdrawing.org/xmlns"
         lines = [
             '<?xml version="1.0" encoding="UTF-8"?>',
@@ -277,8 +294,7 @@ class RequirementSetGraph:
             for n in g.elements():
                 if n.role.value == "GLUE":
                     continue
-                elem_id = f"{rid}__{n.id}"
-                elem_esc = _xml_escape(elem_id)
+                elem_esc = _xml_escape(elem_id[(rid, n.id)])
                 lines.append(f'    <node id="{elem_esc}">')
                 lines.append(f'      <data key="node_type">ELEMENT</data>')
                 lines.append(f'      <data key="role">{_xml_escape(n.role.value)}</data>')
@@ -295,14 +311,17 @@ class RequirementSetGraph:
         for c in self.connections:
             if c.role not in similarity_roles:
                 continue
-            src = _xml_escape(f"{c.a.req_id}__{c.a.node_id}")
-            tgt = _xml_escape(f"{c.b.req_id}__{c.b.node_id}")
-            pair_key = (src, tgt, c.role.value)
+            a_id = elem_id.get((c.a.req_id, c.a.node_id))
+            b_id = elem_id.get((c.b.req_id, c.b.node_id))
+            if a_id is None or b_id is None:           # no matching ELEMENT node
+                continue
+            pair_key = (a_id, b_id, c.role.value)
             if pair_key in seen_pairs:
                 continue
             seen_pairs.add(pair_key)
             rel_label = f"SIMILAR_{c.role.value}"
-            lines.append(f'    <edge id="e{edge_counter}" source="{src}" target="{tgt}">')
+            lines.append(f'    <edge id="e{edge_counter}" '
+                         f'source="{_xml_escape(a_id)}" target="{_xml_escape(b_id)}">')
             lines.append(f'      <data key="rel">{rel_label}</data>')
             lines.append(f'      <data key="score">{c.score:.4f}</data>')
             lines.append('    </edge>')
@@ -311,6 +330,105 @@ class RequirementSetGraph:
         lines.append('  </graph>')
         lines.append('</graphml>')
         return "\n".join(lines)
+
+    def to_req_turtle(self, base: str = "http://reqgraph.io/ontology/") -> str:
+        """Serialize the requirement set as a Turtle/RDF ontology.
+
+        Uses the reqgraph requirement ontology (``reqont:``).  Each requirement
+        becomes a ``reqont:Requirement`` with its IREB elements exported as
+        typed sub-resources connected via ``reqont:fromRequirement``.
+        Cross-requirement similarity edges are exported as
+        ``reqont:similarTo`` triples.
+        """
+        from .core import _ttl_literal
+
+        REQONT = "reqont"
+        lines = [
+            f"@prefix {REQONT}: <{base}> .",
+            "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .",
+            "",
+        ]
+
+        import re as _re
+        _id_re = _re.compile(r"[^A-Za-z0-9_]")
+
+        def _local(s: str) -> str:
+            safe = _id_re.sub("_", s.strip()) or "req"
+            return safe if not safe[0].isdigit() else f"r_{safe}"
+
+        # Emit one Requirement node per req_id + its IREB element nodes
+        for rid in self.req_ids:
+            local_rid = _local(rid)
+            text = self.texts[rid]
+            lines.append(f"{REQONT}:{local_rid} a {REQONT}:Requirement ;")
+            lines.append(f'    {REQONT}:id "{_ttl_literal(rid)}" ;')
+            lines.append(f'    {REQONT}:text "{_ttl_literal(text)}" .')
+            lines.append("")
+
+            g = self.graphs[rid]
+            for n in g.elements():
+                if n.role.value == "GLUE":
+                    continue
+                elem_local = f"{local_rid}_{n.role.value.lower()}"
+                lines.append(f"{REQONT}:{elem_local} a {REQONT}:{n.role.value.capitalize()} ;")
+                lines.append(f'    rdfs:label "{_ttl_literal(n.text.strip())}" ;')
+                lines.append(f"    {REQONT}:fromRequirement {REQONT}:{local_rid} .")
+                lines.append("")
+
+        # Cross-requirement similarity edges
+        for c in self._dedup_pairs():
+            a_local = _local(c.a.req_id)
+            b_local = _local(c.b.req_id)
+            a_elem = f"{a_local}_{c.role.value.lower()}"
+            b_elem = f"{b_local}_{c.role.value.lower()}"
+            lines.append(f"{REQONT}:{a_elem} {REQONT}:similarTo {REQONT}:{b_elem} .")
+
+        return "\n".join(lines)
+
+    def to_dataframe(self, analyze: bool = True):
+        """Flat quality table aligned with the (split) requirements in this set.
+
+        One row per requirement -- compound items are already split into atomic
+        ones by :func:`build_requirement_set_graph`, so the row count matches the
+        GraphML / connection exports. Reuses the already-parsed graphs instead of
+        re-parsing, keeping CSV/JSON output consistent with the graph views.
+
+        Column order mirrors :func:`reqgraph.io_formats.requirements_to_dataframe`:
+        ``id, text, <metadata...>, type, ears_pattern, roundtrip_ok, error,
+        <elements...>, weak_words, non_atomic``.
+        """
+        import pandas as pd
+
+        from .io_formats import _ELEMENT_COLUMNS, _resolve_meta_columns
+        from .quality import enrich as _enrich
+
+        meta_cols = _resolve_meta_columns(
+            k for rid in self.req_ids for k in self.metadata.get(rid, {}))
+
+        rows = []
+        for rid in self.req_ids:
+            g = self.graphs[rid]
+            if analyze and not g.analysis:
+                _enrich(g)
+            text = self.texts[rid]
+            meta = self.metadata.get(rid, {})
+            row = {"id": rid, "text": text}
+            for k, col in meta_cols.items():
+                row[col] = meta.get(k, "")
+            bucket: dict = {}
+            for n in g.elements():
+                bucket.setdefault(n.role.value, []).append(n.text.strip())
+            q = g.analysis.get("quality", {})
+            row.update({"type": g.analysis.get("type"),
+                        "ears_pattern": g.analysis.get("ears_pattern"),
+                        "roundtrip_ok": g.generate() == text,
+                        "error": ""})
+            for r in _ELEMENT_COLUMNS:
+                row[r.value.lower()] = " | ".join(bucket.get(r.value, []))
+            row["weak_words"] = ", ".join(q.get("weak_words", []))
+            row["non_atomic"] = q.get("non_atomic", "")
+            rows.append(row)
+        return pd.DataFrame(rows)
 
 
 def _score_fn(elements: list, similarity: str, embedding_model: str):
@@ -360,7 +478,10 @@ def build_requirement_set_graph(
             req_ids.append(display_id)
             texts[display_id] = seg
             graphs[display_id] = g
-            metadata[display_id] = item_meta
+            # copy per segment: split segments must not alias one dict (nor the
+            # caller's input), otherwise mutating one requirement's metadata
+            # would silently change its siblings'.
+            metadata[display_id] = dict(item_meta)
             for n in g.elements():
                 if n.role in roles:
                     elements.append(ElementRef(display_id, n.id, n.role, n.text.strip()))

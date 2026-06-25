@@ -16,8 +16,8 @@ classifiers = [
     "Topic :: Software Development :: Documentation",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-# the core (rules backend, graph, exporters) is dependency-free on purpose
-dependencies = []
+# rdflib is required for SysML v1 Turtle/RDF input support
+dependencies = ["rdflib>=6.0"]
 
 [project.optional-dependencies]
 nlp = ["spacy>=3.5"]

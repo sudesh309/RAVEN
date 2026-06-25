@@ -470,6 +470,146 @@ write_reqif(items, "reqs.reqif")   # OMG ReqIF (DOORS/Polarion-friendly subset)
 read_reqif("reqs.reqif")
 ```
 
+All readers — `read_requirements_csv`, `read_requirements_excel`,
+`read_requirements_json`, `read_reqif` — return `(id, text, metadata)` triples.
+Any extra columns/attributes (e.g. **rationale**, **applicability**, **additional
+info**) are captured into `metadata` with normalised names (lowercased,
+spaces/hyphens → underscores). A source column whose name collides with a parser
+output column (e.g. a `Subject` or `Type` attribute) is preserved under an
+`attr_` prefix so no data is lost.
+
+```python
+from reqgraph.io_formats import read_requirements_json
+items = read_requirements_json("reqs.json")   # [{"id","text","rationale",...}] or {"R1": {...}}
+# items -> [("R1", "The system shall ...", {"rationale": "...", "applicability": "..."}), ...]
+```
+
+### One-shot export: CSV + JSON + consolidated GraphML
+
+`reqgraph export` reads any supported format, runs the parser, quality analysis,
+**and** cross-requirement connection detection, then writes a quality table
+(CSV/JSON) plus a single **element-level GraphML** in one pass. Compound rows are
+split into atomic requirements consistently across every output.
+
+```bash
+python -m reqgraph export reqs.csv  --out-prefix build/out      # → out.csv, out.json, out.graphml, out.req.ttl
+python -m reqgraph export reqs.json --csv q.csv --graphml g.xml  # pick individual outputs
+python -m reqgraph export reqs.reqif --out-prefix out/ --threshold 0.5
+python -m reqgraph export reqs.csv  --req-turtle reqs.ttl        # requirements as a reqont: ontology
+```
+
+`--req-turtle` (or `<prefix>.req.ttl`) serialises the requirement set as a
+Turtle/RDF ontology (`RequirementSetGraph.to_req_turtle()`, namespace
+`reqont: <http://reqgraph.io/ontology/>`): each requirement becomes a
+`reqont:Requirement` with its IREB role elements as typed sub-resources
+(`reqont:fromRequirement`) and cross-requirement `reqont:similarTo` edges — load
+it straight into a triplestore alongside a model ontology.
+
+The consolidated GraphML (`RequirementSetGraph.to_element_graphml()`) is one graph
+containing **REQ** nodes (with quality attributes + metadata), **ELEMENT** nodes
+for every SUBJECT/OBJECT/CONDITION/… span (`HAS_ELEMENT` edges), and `SIMILAR_*`
+cross-requirement edges weighted by similarity — so tools like Gephi / yEd /
+Cytoscape show all connected subjects and objects across the whole set.
+
+#### `similarity` and `threshold`
+
+Both `connections` and `export` connect requirements that share a similar
+SUBJECT/OBJECT phrase. Two knobs control this:
+
+* **`--similarity`** — how two phrases are compared. `lexical` (default) blends
+  word-overlap (Jaccard) with character similarity; it is instant and needs no
+  extra packages. `embedding` uses BERT cosine similarity (catches synonyms /
+  paraphrases) but requires `torch` + `transformers`.
+* **`--threshold`** *(0–1, default 0.6)* — the similarity cut-off. A link is kept
+  only when the shared phrase scores **≥ threshold**. Higher is stricter (fewer,
+  higher-confidence links); lower surfaces more, looser matches. Values outside
+  0–1 are clamped with a warning.
+
+### Quality parameters
+
+`reqgraph.quality.enrich(graph)` attaches an IREB-flavoured analysis to
+`graph.analysis` (no ML required). These are the columns/flags you see in the
+batch table, the `export` outputs, and the GUI:
+
+| Parameter | Meaning |
+|---|---|
+| **type** | Requirement category inferred from keyword counts: `functional`, `performance`, `interface`, `safety`, or `usability`. |
+| **ears_pattern** | EARS clause shape from the CONDITION marker: `ubiquitous` (always active), `event-driven (WHEN)`, `state-driven (WHILE)`, `unwanted behaviour (IF/THEN)`, or `optional feature (WHERE)`. |
+| **weak_words** | Vague / unverifiable terms (`fast`, `robust`, `user-friendly`, `optimal`, `approximately`, …) — they make a requirement ambiguous. Empty is good. |
+| **passive_voice** | The action is phrased passively (“shall be logged”), hiding the responsible actor. |
+| **missing_modality** | No `shall/should/must/will/may/can` — the statement is not phrased as a binding requirement. |
+| **vague_quantifier** | Unbounded quantities (`some`, `several`, `many`, `as much as possible`) that cannot be verified. |
+| **non_atomic** | The sentence joins multiple clauses with `and`/`or`; it should usually be split so each part is independently testable. |
+| **compound_requirement** | More than one modality verb (e.g. two `shall`s) — likely two requirements in one line; `parse`/`export` split these automatically. |
+| **roundtrip_ok** | Sanity check: the parsed graph regenerates the original text byte-for-byte. |
+
+```python
+from reqgraph import RequirementParser, RUPP_TEMPLATE
+from reqgraph.quality import enrich
+g = enrich(RequirementParser(RUPP_TEMPLATE).parse(
+    "The system shall quickly process all requests."))
+print(g.analysis["type"])               # 'functional'
+print(g.analysis["ears_pattern"])        # 'ubiquitous'
+print(g.analysis["quality"]["weak_words"])   # ['quickly']
+```
+
+## SysML ↔ Requirements comparison
+
+Two complementary engines measure how well a SysML model and a natural-language
+requirement set agree — *model coverage* (architecture traced to requirements),
+*requirement coverage* (requirements reflected in the architecture), and an
+overall *semantic match* (F1 harmonic mean). Both map SysML elements onto the
+same IREB roles the requirement parser uses (Block→SUBJECT, Activity→PROCESS,
+Property→OBJECT, State→CONDITION, Port→ACTOR, …).
+
+### `compare` — SysML v2 textual notation
+
+Shallow name-to-phrase matching, role-bucketed. Input is SysML v2 `.sysml`/
+`.kerml` text.
+
+```bash
+python -m reqgraph compare model.sysml reqs.csv
+python -m reqgraph compare model.sysml reqs.txt --format json --graphml match.graphml
+python -m reqgraph compare model.sysml reqs.csv --similarity embedding --threshold 0.5
+```
+
+### `compare-v1` — SysML v1 XMI / Turtle (context-aware)
+
+For SysML v1 models exported as **XMI** (MagicDraw/Cameo/Papyrus) or as a
+**Turtle/RDF ontology** (auto-detected by extension/content; Turtle needs
+`rdflib`). Instead of matching on element names alone, it builds a *neighborhood
+context* for each element by BFS over the model graph (`--context-hops`, default
+2) and scores:
+
+```
+confidence = 0.25·name + 0.55·context + 0.20·satisfaction_bonus
+```
+
+The satisfaction bonus rewards elements the model already links to a matching
+requirement via a `satisfy`/`refine` relation.
+
+```bash
+python -m reqgraph compare-v1 model.xmi reqs.csv                  # XMI input
+python -m reqgraph compare-v1 model.ttl reqs.csv                  # Turtle/RDF input
+python -m reqgraph compare-v1 model.xmi reqs.csv --context-hops 3 --threshold 0.4 \
+        --report match.json --graphml match.graphml \
+        --kg model_kg.graphml --out-turtle model.ttl --ontology-graphml ont.graphml
+```
+
+Extra outputs unique to `compare-v1`:
+
+* **`--kg`** — the full model as a knowledge-graph GraphML
+  (`SysMLV1Model.to_graphml()`), independent of the comparison.
+* **`--out-turtle`** — the model re-serialised to canonical Turtle
+  (`sysmlkg:` ontology), enabling a Turtle→KG→Turtle round-trip.
+* **`--ontology-graphml`** — an ontology-diff graph comparing the IREB role
+  structure of the requirements against the SysML element-type structure of the
+  model, with `MAPS_TO` edges weighted by mean confidence. The GUI renders the
+  same diff as a Mermaid view.
+
+Both commands are also available in the GUI as dedicated "Compare … vs
+Requirements" cards (`/api/compare`, `/api/compare-v1`).
+
 ## GUI
 
 ```bash
@@ -496,6 +636,10 @@ The page also includes:
   (one per line) and see a network graph connecting requirements that share
   similar SUBJECT/OBJECT elements, with the same knowledge-graph export
   buttons.
+* an **"Import & analyze"** panel: upload a CSV / Excel / JSON / ReqIF file (or
+  paste raw text), and get the per-requirement quality table (auto-discovering
+  any extra metadata columns), the cross-requirement connections network, and
+  one-click downloads of the CSV, JSON, and consolidated element-level GraphML.
 
 ## Knowledge graph export
 
@@ -542,6 +686,13 @@ python -m reqgraph analyze reqs.csv
 
 # find cross-requirement SUBJECT/OBJECT connections in a set, visualize them
 python -m reqgraph connections reqs.csv --format mermaid
+
+# one-shot export: quality CSV/JSON + element GraphML + requirements Turtle ontology
+python -m reqgraph export reqs.csv --out-prefix build/out --req-turtle reqs.ttl
+
+# compare a SysML model against requirements (v2 text, or v1 XMI/Turtle)
+python -m reqgraph compare    model.sysml reqs.csv
+python -m reqgraph compare-v1 model.xmi   reqs.csv --kg model_kg.graphml
 ```
 
 A ready-to-use tagger trained on the 30-requirement seed corpus
@@ -560,6 +711,11 @@ reqgraph/
   quality.py     IREB quality smells + type + EARS classification
   io_formats.py  CSV / Excel / ReqIF
   corpus.py      requirement-set SUBJECT/OBJECT cross-referencing + connections graph
+                 + to_req_turtle() requirements ontology export
+  sysml_parser.py    SysML v2 textual-notation parser
+  sysml_compare.py   SysML v2 ↔ requirements comparison (compare)
+  sysml_v1_parser.py   SysML v1 XMI + Turtle/RDF parser → knowledge graph
+  sysml_v1_compare.py  context-aware SysML v1 comparison + ontology diff (compare-v1)
 tests/           pytest suite (lossless round-trip is the headline invariant)
 ```
 

@@ -1,10 +1,11 @@
 """
 reqgraph command-line interface.
 
-    python -m reqgraph parse  "<requirement text>" [options]
-    python -m reqgraph batch  <in.csv|in.xlsx|in.reqif> [--out out.csv|.xlsx|.reqif|.json]
-    python -m reqgraph train  [--model NAME] [--epochs N] [--out DIR]
-    python -m reqgraph analyze <in.csv|in.xlsx|in.reqif>
+    python -m reqgraph parse    "<requirement text>" [options]
+    python -m reqgraph batch    <in.csv|in.xlsx|in.reqif> [--out out.csv|.xlsx|.reqif|.json]
+    python -m reqgraph train    [--model NAME] [--epochs N] [--out DIR]
+    python -m reqgraph analyze  <in.csv|in.xlsx|in.reqif>
+    python -m reqgraph compare  <model.sysml> <requirements.csv|.json|.txt>
 
 Run any subcommand with -h for its options.
 """
@@ -42,18 +43,92 @@ def _build_parser(template_name, backend, model):
 
 
 def _read_items(path):
+    from .errors import DataFormatError
     from .io_formats import (read_reqif, read_requirements_csv,
                              read_requirements_excel, read_requirements_json)
+    if not os.path.isfile(path):
+        sys.exit(f"error: input file not found: {path}")
     ext = os.path.splitext(path)[1].lower()
-    if ext == ".csv":
-        return read_requirements_csv(path)
-    if ext in (".xlsx", ".xls"):
-        return read_requirements_excel(path)
-    if ext in (".reqif", ".xml"):
-        return read_reqif(path)
-    if ext == ".json":
-        return read_requirements_json(path)
-    sys.exit(f"error: unsupported input extension {ext!r}")
+    def _read_plain_text(path):
+        with open(path, encoding="utf-8") as fh:
+            return [ln.strip() for ln in fh if ln.strip()]
+
+    readers = {".csv": read_requirements_csv, ".json": read_requirements_json,
+               ".xlsx": read_requirements_excel, ".xls": read_requirements_excel,
+               ".reqif": read_reqif, ".xml": read_reqif,
+               ".txt": _read_plain_text}
+    if ext not in readers:
+        sys.exit(f"error: unsupported input extension {ext!r}; use one of "
+                 f".csv .xlsx .xls .json .reqif .xml .txt")
+    try:
+        return readers[ext](path)
+    except DataFormatError as exc:
+        sys.exit(f"error: {exc}")
+    except Exception as exc:                       # malformed file, bad encoding…
+        sys.exit(f"error: could not read {path}: {exc}")
+
+
+def _parse_roles(spec):
+    """Parse a --roles string like 'SUBJECT,OBJECT' into Role enums."""
+    try:
+        return tuple(Role(r.strip().upper()) for r in spec.split(",") if r.strip())
+    except ValueError as exc:
+        sys.exit(f"error: unknown role {exc}; choose from "
+                 f"{', '.join(r.value for r in Role)}")
+
+
+def _validate_threshold(value):
+    if value < 0 or value > 1:
+        clamped = min(1.0, max(0.0, value))
+        print(f"warning: threshold {value:g} is outside 0–1; clamped to {clamped:g}",
+              file=sys.stderr)
+        return clamped
+    return value
+
+
+def _read_sysml_model(path: str):
+    """Read a SysML v2 ``.sysml`` / ``.kerml`` file with a friendly error."""
+    from .errors import DataFormatError
+    from .sysml_parser import read_sysml
+    if not os.path.isfile(path):
+        sys.exit(f"error: SysML model file not found: {path!r}")
+    try:
+        return read_sysml(path)
+    except DataFormatError as exc:
+        sys.exit(f"error: {exc}")
+    except Exception as exc:
+        sys.exit(f"error: could not read {path}: {exc}")
+
+
+def _read_sysml_v1_model(path: str):
+    """Read a SysML v1 XMI or Turtle file with a friendly error."""
+    from .errors import DataFormatError
+    from .sysml_v1_parser import read_sysml_v1
+    if not os.path.isfile(path):
+        sys.exit(f"error: SysML v1 model file not found: {path!r}")
+    try:
+        return read_sysml_v1(path)
+    except DataFormatError as exc:
+        sys.exit(f"error: {exc}")
+    except ImportError as exc:
+        sys.exit(f"error: {exc}")
+    except Exception as exc:
+        sys.exit(f"error: could not read {path}: {exc}")
+
+
+def _build_set_graph_cli(items, *, template, extractor, roles, threshold,
+                         similarity, embedding_model):
+    """build_requirement_set_graph with a friendly message if the optional
+    embedding backend's dependencies are missing."""
+    from .corpus import build_requirement_set_graph
+    try:
+        return build_requirement_set_graph(
+            items, template=template, extractor=extractor, roles=roles,
+            threshold=threshold, similarity=similarity,
+            embedding_model=embedding_model)
+    except ImportError as exc:
+        sys.exit(f"error: --similarity embedding needs PyTorch + transformers "
+                 f"installed ({exc}); use --similarity lexical (no extra deps)")
 
 
 # --- subcommands -----------------------------------------------------------
@@ -171,19 +246,20 @@ def cmd_gui(args):
 
 
 def cmd_connections(args):
-    from .corpus import build_requirement_set_graph
     items = _read_items(args.infile)
+    if not items:
+        sys.exit("error: no requirements found in input file")
     ex = None
     if args.backend == "spacy":
         ex = SpacyExtractor()
     elif args.backend == "bert":
         ex = BertTaggerExtractor(model_dir=args.model)
     template = TEMPLATES.get(args.template, RUPP_TEMPLATE)
-    roles = tuple(Role(r.strip().upper()) for r in args.roles.split(","))
+    roles = _parse_roles(args.roles)
 
-    rsg = build_requirement_set_graph(
+    rsg = _build_set_graph_cli(
         items, template=template, extractor=ex, roles=roles,
-        threshold=args.threshold, similarity=args.similarity,
+        threshold=_validate_threshold(args.threshold), similarity=args.similarity,
         embedding_model=args.embedding_model)
 
     fmt = args.format
@@ -244,9 +320,6 @@ def cmd_analyze(args):
 
 def cmd_export(args):
     """Parse + quality analysis + connections → CSV, JSON, consolidated GraphML."""
-    from .corpus import build_requirement_set_graph
-    from .io_formats import requirements_to_dataframe
-
     items = _read_items(args.infile)
     if not items:
         sys.exit("error: no requirements found in input file")
@@ -259,28 +332,35 @@ def cmd_export(args):
             sys.exit("error: --backend bert requires --model")
         ex = BertTaggerExtractor(model_dir=args.model)
     template = TEMPLATES.get(args.template, RUPP_TEMPLATE)
-    roles = tuple(Role(r.strip().upper()) for r in args.roles.split(","))
+    roles = _parse_roles(args.roles)
 
     prefix = args.out_prefix
     csv_path   = args.csv     or (f"{prefix}.csv"     if prefix else None)
     json_path  = args.json    or (f"{prefix}.json"    if prefix else None)
     gml_path   = args.graphml or (f"{prefix}.graphml" if prefix else None)
+    rttl_path  = args.req_turtle or (f"{prefix}.req.ttl" if prefix else None)
 
-    if not any([csv_path, json_path, gml_path]):
-        sys.exit("error: specify --out-prefix or at least one of --csv / --json / --graphml")
+    if not any([csv_path, json_path, gml_path, rttl_path]):
+        sys.exit("error: specify --out-prefix or at least one of "
+                 "--csv / --json / --graphml / --req-turtle")
 
     # build set graph: parses every requirement and finds cross-req connections
-    rsg = build_requirement_set_graph(
+    rsg = _build_set_graph_cli(
         items, template=template, extractor=ex, roles=roles,
-        threshold=args.threshold, similarity=args.similarity,
+        threshold=_validate_threshold(args.threshold), similarity=args.similarity,
         embedding_model=args.embedding_model)
 
-    # quality enrichment (build_requirement_set_graph doesn't call enrich)
-    for rid in rsg.req_ids:
-        enrich(rsg.graphs[rid])
-
-    # flat quality + metadata table
-    df = requirements_to_dataframe(items, template=template, extractor=ex)
+    # flat quality + metadata table, derived from the already-parsed (and
+    # compound-split) graphs so the CSV/JSON row set matches the GraphML.
+    # Built lazily so a GraphML-only export needs no pandas.
+    df = None
+    if csv_path or json_path:
+        try:
+            df = rsg.to_dataframe()
+        except ImportError as exc:
+            sys.exit(f"error: CSV/JSON output needs pandas installed ({exc}); "
+                     f"install it with `pip install reqgraph[io]`, or export only "
+                     f"GraphML with --graphml")
 
     written = []
     if csv_path:
@@ -293,11 +373,186 @@ def cmd_export(args):
         with open(gml_path, "w", encoding="utf-8") as fh:
             fh.write(rsg.to_element_graphml())
         written.append(gml_path)
+    if rttl_path:
+        with open(rttl_path, "w", encoding="utf-8") as fh:
+            fh.write(rsg.to_req_turtle())
+        written.append(rttl_path)
 
     print(f"exported {len(rsg.req_ids)} requirements "
           f"({len(rsg.connections)} connections found)")
     for p in written:
         print(f"  -> {p}")
+    return 0
+
+
+def cmd_compare(args):
+    """Semantically compare a SysML v2 model against a requirement set."""
+    from pathlib import Path
+    model = _read_sysml_model(args.model_file)
+    items = _read_items(args.req_file)
+    if not items:
+        sys.exit("error: no requirements found in requirement file")
+
+    ex = None
+    if args.backend == "spacy":
+        ex = SpacyExtractor()
+    elif args.backend == "bert":
+        if not args.model:
+            sys.exit("error: --backend bert requires --model")
+        ex = BertTaggerExtractor(model_dir=args.model)
+    template = TEMPLATES.get(args.template, RUPP_TEMPLATE)
+    roles = _parse_roles(args.roles)
+    threshold = _validate_threshold(args.threshold)
+
+    from .sysml_compare import compare as _compare
+    try:
+        report = _compare(model, items, roles=roles, threshold=threshold,
+                          similarity=args.similarity,
+                          embedding_model=args.embedding_model,
+                          template=template, extractor=ex)
+    except ImportError as exc:
+        sys.exit(f"error: --similarity embedding needs PyTorch + transformers "
+                 f"installed ({exc}); use --similarity lexical")
+
+    for w in report.warnings:
+        print(f"warning: {w}", file=sys.stderr)
+
+    if args.format == "json":
+        print(json.dumps(report.to_dict(), indent=2))
+    else:
+        # Human-readable summary
+        def pct(v):
+            return f"{v:.1%}"
+        print(f"\nSemantic match:    {pct(report.semantic_match)}")
+        print(f"Model coverage:    {pct(report.model_coverage)}"
+              f"  ({report.n_model_elements} model elements)")
+        print(f"Req coverage:      {pct(report.req_coverage)}"
+              f"  ({report.n_req_elements} req elements)")
+        if report.role_breakdown:
+            print("\nRole breakdown:")
+            for role_val, stats in report.role_breakdown.items():
+                print(f"  {role_val:<15}  "
+                      f"model={pct(stats['model_coverage'])}  "
+                      f"req={pct(stats['req_coverage'])}  "
+                      f"n_model={stats['n_model']}  n_req={stats['n_req']}")
+        if report.matches:
+            print(f"\nMatches ({len(report.matches)}):")
+            for m in report.matches[:20]:
+                print(f"  [{m.sysml_element.element_type}] {m.sysml_element.name}"
+                      f"  --{m.role.value} {m.score:.2f}-->  "
+                      f"[{m.req_id}] {m.req_text!r}")
+            if len(report.matches) > 20:
+                print(f"  … {len(report.matches) - 20} more (use --format json)")
+        if report.unmatched_model:
+            print(f"\nModel elements NOT covered by any requirement "
+                  f"({len(report.unmatched_model)}):")
+            for e in report.unmatched_model:
+                print(f"  [{e.element_type}] {e.name}"
+                      + (f"  (in {e.package})" if e.package else ""))
+        if report.unmatched_reqs:
+            print(f"\nRequirement elements NOT found in model "
+                  f"({len(report.unmatched_reqs)}):")
+            for req_id, role_val, txt in report.unmatched_reqs:
+                print(f"  {req_id}  [{role_val}]  {txt!r}")
+
+    if args.report:
+        Path(args.report).write_text(
+            json.dumps(report.to_dict(), indent=2), encoding="utf-8")
+        print(f"\nreport -> {args.report}")
+    if args.graphml:
+        Path(args.graphml).write_text(report.to_graphml(), encoding="utf-8")
+        print(f"graphml -> {args.graphml}")
+    return 0
+
+
+def cmd_compare_v1(args):
+    """Semantically compare a SysML v1 model against a requirement set."""
+    from pathlib import Path
+    model = _read_sysml_v1_model(args.model_file)
+    items = _read_items(args.req_file)
+    if not items:
+        sys.exit("error: no requirements found in requirement file")
+
+    ex = None
+    if args.backend == "spacy":
+        ex = SpacyExtractor()
+    elif args.backend == "bert":
+        if not args.model:
+            sys.exit("error: --backend bert requires --model")
+        ex = BertTaggerExtractor(model_dir=args.model)
+    template = TEMPLATES.get(args.template, RUPP_TEMPLATE)
+    roles = _parse_roles(args.roles)
+    threshold = _validate_threshold(args.threshold)
+
+    from .sysml_v1_compare import compare_v1 as _compare_v1
+    try:
+        report = _compare_v1(model, items, roles=roles, threshold=threshold,
+                             similarity=args.similarity,
+                             embedding_model=args.embedding_model,
+                             context_hops=args.context_hops,
+                             template=template, extractor=ex)
+    except ImportError as exc:
+        sys.exit(f"error: --similarity embedding needs PyTorch + transformers "
+                 f"installed ({exc}); use --similarity lexical")
+
+    for w in report.warnings:
+        print(f"warning: {w}", file=sys.stderr)
+
+    if args.format == "json":
+        print(json.dumps(report.to_dict(), indent=2))
+    else:
+        def pct(v):
+            return f"{v:.1%}"
+        print(f"\nSysML v1 Semantic match:  {pct(report.semantic_match)}")
+        print(f"Model coverage:           {pct(report.model_coverage)}"
+              f"  ({report.n_model_elements} model elements)")
+        print(f"Req coverage:             {pct(report.req_coverage)}"
+              f"  ({report.n_req_elements} req elements)")
+        if report.role_breakdown:
+            print("\nRole breakdown:")
+            for role_val, stats in report.role_breakdown.items():
+                print(f"  {role_val:<15}  "
+                      f"model={pct(stats['model_coverage'])}  "
+                      f"req={pct(stats['req_coverage'])}  "
+                      f"n_model={stats['n_model']}  n_req={stats['n_req']}")
+        if report.matches:
+            print(f"\nTop matches ({min(20, len(report.matches))}):")
+            for m in report.matches[:20]:
+                print(f"  [{m.element.stereotype or m.element.element_type}] "
+                      f"{m.element.name}"
+                      f"  conf={m.confidence:.2f} "
+                      f"(name={m.name_score:.2f}, ctx={m.context_score:.2f}"
+                      + (", sat" if m.via_satisfaction else "") + ")"
+                      f"  --{m.role.value}-->  [{m.req_id}] {m.req_text!r}")
+            if len(report.matches) > 20:
+                print(f"  … {len(report.matches) - 20} more (use --format json)")
+        if report.unmatched_model:
+            print(f"\nModel elements NOT covered ({len(report.unmatched_model)}):")
+            for e in report.unmatched_model[:10]:
+                print(f"  [{e.stereotype or e.element_type}] {e.name}"
+                      + (f"  (in {e.package})" if e.package else ""))
+        if report.unmatched_reqs:
+            print(f"\nRequirement elements NOT in model ({len(report.unmatched_reqs)}):")
+            for req_id, role_val, txt in report.unmatched_reqs[:10]:
+                print(f"  {req_id}  [{role_val}]  {txt!r}")
+
+    if args.report:
+        Path(args.report).write_text(
+            json.dumps(report.to_dict(), indent=2), encoding="utf-8")
+        print(f"\nreport -> {args.report}")
+    if args.graphml:
+        Path(args.graphml).write_text(report.to_graphml(), encoding="utf-8")
+        print(f"graphml -> {args.graphml}")
+    if args.kg:
+        Path(args.kg).write_text(model.to_graphml(), encoding="utf-8")
+        print(f"model KG graphml -> {args.kg}")
+    if args.out_turtle:
+        Path(args.out_turtle).write_text(model.to_turtle(), encoding="utf-8")
+        print(f"model turtle -> {args.out_turtle}")
+    if args.ontology_graphml and report.ontology_diff:
+        Path(args.ontology_graphml).write_text(
+            report.ontology_diff.to_graphml(), encoding="utf-8")
+        print(f"ontology graphml -> {args.ontology_graphml}")
     return 0
 
 
@@ -361,18 +616,22 @@ def main(argv=None):
 
     px = sub.add_parser(
         "export",
-        help="parse + quality + connections → CSV, JSON, consolidated element GraphML")
+        help="parse + quality + connections → CSV, JSON, GraphML, requirements Turtle")
     px.add_argument("infile",
                     help="input file (.csv, .xlsx, .xls, .json, .reqif, .xml)")
     px.add_argument("--out-prefix", default=None,
                     help="output path prefix; generates <prefix>.csv, <prefix>.json, "
-                         "<prefix>.graphml (overridden by individual flags)")
+                         "<prefix>.graphml, <prefix>.req.ttl "
+                         "(overridden by individual flags)")
     px.add_argument("--csv",     metavar="PATH", default=None,
                     help="explicit CSV output path")
     px.add_argument("--json",    metavar="PATH", default=None,
                     help="explicit JSON output path")
     px.add_argument("--graphml", metavar="PATH", default=None,
                     help="explicit consolidated element GraphML output path")
+    px.add_argument("--req-turtle", metavar="PATH", default=None,
+                    help="explicit requirements Turtle/RDF ontology output path "
+                         "(reqont: ontology)")
     px.add_argument("--template",  default="IREB-Rupp")
     px.add_argument("--backend",   default="rules", choices=["rules", "spacy", "bert"])
     px.add_argument("--model",     default=None,
@@ -383,6 +642,70 @@ def main(argv=None):
     px.add_argument("--threshold",  type=float, default=0.6)
     px.add_argument("--embedding-model", default="prajjwal1/bert-tiny")
     px.set_defaults(func=cmd_export)
+
+    pcmp = sub.add_parser(
+        "compare",
+        help="semantically compare a SysML v2 model against a requirement set")
+    pcmp.add_argument("model_file",
+                      help="SysML v2 model (.sysml or .kerml)")
+    pcmp.add_argument("req_file",
+                      help="requirement file (.csv, .xlsx, .xls, .json, .reqif, .xml, "
+                           "or plain .txt)")
+    pcmp.add_argument("--threshold",  type=float, default=0.6,
+                      help="similarity cut-off 0–1 (default 0.6)")
+    pcmp.add_argument("--similarity", default="lexical", choices=["lexical", "embedding"],
+                      help="'lexical' (default, no deps) or 'embedding' (needs torch)")
+    pcmp.add_argument("--embedding-model", default="prajjwal1/bert-tiny",
+                      help="HuggingFace model for embedding similarity")
+    pcmp.add_argument("--roles", default="SUBJECT,PROCESS,OBJECT,CONDITION",
+                      help="comma-separated semantic roles to compare "
+                           "(default SUBJECT,PROCESS,OBJECT,CONDITION)")
+    pcmp.add_argument("--format", default="text", choices=["text", "json"],
+                      help="output format: human-readable text (default) or JSON")
+    pcmp.add_argument("--report",  metavar="PATH", default=None,
+                      help="write full JSON report to this file")
+    pcmp.add_argument("--graphml", metavar="PATH", default=None,
+                      help="write bipartite match GraphML to this file")
+    pcmp.add_argument("--template", default="IREB-Rupp")
+    pcmp.add_argument("--backend",  default="rules", choices=["rules", "spacy", "bert"])
+    pcmp.add_argument("--model",    default=None,
+                      help="saved tagger dir (for --backend bert)")
+    pcmp.set_defaults(func=cmd_compare)
+
+    pcv1 = sub.add_parser(
+        "compare-v1",
+        help="context-aware comparison of a SysML v1 XMI/Turtle model "
+             "against a requirement set (uses graph neighborhood context)")
+    pcv1.add_argument("model_file",
+                      help="SysML v1 model (.xmi, .uml, .xml, .ttl, .rdf, .owl, .n3)")
+    pcv1.add_argument("req_file",
+                      help="requirement file (.csv, .xlsx, .xls, .json, .reqif, "
+                           ".xml, or plain .txt)")
+    pcv1.add_argument("--threshold",  type=float, default=0.5,
+                      help="confidence cut-off 0–1 (default 0.5)")
+    pcv1.add_argument("--similarity", default="lexical",
+                      choices=["lexical", "embedding"],
+                      help="'lexical' (default) or 'embedding' (needs torch)")
+    pcv1.add_argument("--embedding-model", default="prajjwal1/bert-tiny")
+    pcv1.add_argument("--roles", default="SUBJECT,PROCESS,OBJECT,CONDITION",
+                      help="comma-separated roles (default SUBJECT,PROCESS,OBJECT,CONDITION)")
+    pcv1.add_argument("--context-hops", type=int, default=2,
+                      help="BFS hops for neighborhood context (default 2)")
+    pcv1.add_argument("--format", default="text", choices=["text", "json"])
+    pcv1.add_argument("--report",  metavar="PATH", default=None,
+                      help="write full JSON report to this file")
+    pcv1.add_argument("--graphml", metavar="PATH", default=None,
+                      help="write bipartite match GraphML to this file")
+    pcv1.add_argument("--kg",      metavar="PATH", default=None,
+                      help="write full model knowledge-graph GraphML to this file")
+    pcv1.add_argument("--out-turtle", metavar="PATH", default=None,
+                      help="write round-tripped model Turtle to this file")
+    pcv1.add_argument("--ontology-graphml", metavar="PATH", default=None,
+                      help="write ontology-diff GraphML to this file")
+    pcv1.add_argument("--template", default="IREB-Rupp")
+    pcv1.add_argument("--backend",  default="rules", choices=["rules", "spacy", "bert"])
+    pcv1.add_argument("--model",    default=None)
+    pcv1.set_defaults(func=cmd_compare_v1)
 
     pc = sub.add_parser("connections",
                         help="find similar SUBJECT/OBJECT elements across a "

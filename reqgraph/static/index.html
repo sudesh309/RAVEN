@@ -109,6 +109,39 @@
   .tab-btn:hover:not(.active){border-color:var(--accent);color:var(--accent)}
   #exp-connwrap{overflow-x:auto;margin-bottom:16px}
   .qty-ok{color:var(--ok)} .qty-bad{color:var(--bad)}
+  #exp-warn,#set-warn{display:none;background:#FBF3E2;color:#7A5A12;
+    border:1px solid #ECD9A6;border-radius:8px;padding:9px 13px;font-size:13.5px}
+  #exp-warn ul,#set-warn ul{margin:4px 0 0;padding-left:20px}
+  .thr-val{display:inline-block;min-width:34px;color:var(--accent);font-weight:600}
+  details.paramhelp{margin-top:10px;font-size:13px;color:var(--muted)}
+  details.paramhelp summary{cursor:pointer;color:var(--accent);font-weight:600;
+    list-style:none;user-select:none}
+  details.paramhelp summary::before{content:"\\24D8  ";font-weight:400}
+  details.paramhelp[open] summary{margin-bottom:6px}
+  details.paramhelp ul{margin:4px 0;padding-left:20px;line-height:1.65}
+  details.paramhelp code{background:var(--accent-soft);border-radius:4px;
+    padding:1px 5px;font-size:12px}
+  .graph-legend{display:flex;flex-wrap:wrap;gap:14px;align-items:center;
+    font-size:12px;color:var(--text);margin-bottom:6px}
+  .graph-legend .ll{display:flex;align-items:center;gap:5px}
+  .graph-legend .dot{width:10px;height:10px;border-radius:50%}
+  .graph-legend .ln{width:18px;height:3px;border-radius:2px}
+  /* compare model vs requirements */
+  #cmp-error{display:none;background:var(--bad-soft);color:var(--bad);
+    border:1px solid #f0c0c0;border-radius:8px;padding:9px 13px;font-size:14px}
+  #cmp-warn{display:none;background:#FBF3E2;color:#7A5A12;
+    border:1px solid #ECD9A6;border-radius:8px;padding:9px 13px;font-size:13.5px}
+  #cmp-warn ul{margin:4px 0 0;padding-left:20px}
+  .cmp-two-col{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:720px){.cmp-two-col{grid-template-columns:1fr}}
+  .gap-panel{background:var(--bg);border:1px solid var(--border);border-radius:10px;
+    padding:12px 14px;font-size:13.5px}
+  .gap-panel h4{font-size:11px;text-transform:uppercase;letter-spacing:.05em;
+    color:var(--muted);margin:0 0 8px;font-weight:600}
+  .cmp-section-head{font-size:11.5px;font-weight:600;letter-spacing:.04em;
+    text-transform:uppercase;color:var(--muted);margin:16px 0 8px}
+  .score-bar-wrap{display:flex;align-items:center;gap:6px}
+  .score-bar{height:7px;border-radius:3px;display:inline-block;min-width:4px}
 </style>
 </head>
 <body>
@@ -188,8 +221,9 @@
   <section class="card">
     <h2>Requirement set &mdash; find connections</h2>
     <div class="hint" style="margin:0 0 8px;display:block">
-      One requirement per line. Each line gets its own graph; SUBJECT/OBJECT
-      elements that recur across different lines are connected below.
+      <b>Quick look:</b> paste one requirement per line and see which lines share a
+      similar subject/object. For file import (CSV/Excel/JSON/ReqIF), quality
+      scoring and extra attributes, use <b>Import &amp; analyze</b> below.
     </div>
     <textarea id="set-text" spellcheck="false" style="min-height:130px"></textarea>
     <div class="controls">
@@ -200,12 +234,24 @@
           <option value="lexical" selected>lexical (no deps)</option>
           <option value="embedding">BERT embedding</option>
         </select></div>
-      <div class="ctl"><label for="set-threshold">Threshold</label>
-        <input id="set-threshold" class="num" type="number" min="0" max="1" step="0.05" value="0.6"></div>
+      <div class="ctl"><label for="set-threshold">Threshold <span id="set-thr-val" class="thr-val">0.60</span></label>
+        <input id="set-threshold" type="range" min="0" max="1" step="0.05" value="0.6"
+               style="width:130px" oninput="$('set-thr-val').textContent=(+this.value).toFixed(2)"></div>
       <button class="primary" id="set-parse" style="align-self:flex-end">Find connections</button>
     </div>
+    <details class="paramhelp">
+      <summary>What do Similarity and Threshold mean?</summary>
+      <ul>
+        <li><b>Similarity</b> — <b>lexical</b> compares words (instant, no deps);
+          <b>BERT embedding</b> compares meaning/synonyms (needs PyTorch +
+          transformers).</li>
+        <li><b>Threshold</b> — similarity cut-off 0–1. Two lines link only when a
+          shared subject/object scores ≥ this. Higher = stricter; 0.6 is balanced.</li>
+      </ul>
+    </details>
   </section>
 
+  <div id="set-warn"></div>
   <div id="set-error"></div>
 
   <section class="card" id="setcard" hidden>
@@ -235,42 +281,64 @@
   <section class="card">
     <h2>Import &amp; analyze requirement set</h2>
     <div class="hint" style="margin:0 0 10px;display:block">
-      Upload a file (CSV, Excel, JSON, ReqIF) or paste CSV/JSON text.
-      Extra columns like <em>rationale</em>, <em>applicability</em>, <em>additional_info</em>
-      are detected automatically and preserved in all outputs.
+      Run the full pipeline over a whole set: parse every requirement, score its
+      quality, and find requirements that share a similar subject/object. Upload a
+      file or paste text. Extra columns like <em>rationale</em>,
+      <em>applicability</em>, <em>additional_info</em> are detected automatically
+      and preserved in every output.
     </div>
     <div class="tab-btns">
-      <button class="tab-btn active" id="exp-tab-file" onclick="expTab('file')">&#128193; Upload file</button>
-      <button class="tab-btn" id="exp-tab-paste" onclick="expTab('paste')">&#128203; Paste text</button>
+      <button class="tab-btn active" id="exp-tab-paste" onclick="expTab('paste')">&#128203; Paste text</button>
+      <button class="tab-btn" id="exp-tab-file" onclick="expTab('file')">&#128193; Upload file</button>
     </div>
-    <div id="exp-file-pane">
+    <div id="exp-file-pane" style="display:none">
       <input type="file" id="exp-file" accept=".csv,.xlsx,.xls,.json,.reqif,.xml"
              style="font:inherit;cursor:pointer">
+      <div class="hint" style="display:block;margin-top:6px">
+        Accepts <b>.csv .xlsx .xls .json .reqif .xml</b>. CSV/Excel need a header
+        row with a <code>text</code> column (and optionally <code>id</code>).
+      </div>
     </div>
-    <div id="exp-paste-pane" style="display:none">
+    <div id="exp-paste-pane">
       <div class="controls" style="margin-top:0;margin-bottom:6px">
         <div class="ctl"><label for="exp-format">Format</label>
-          <select id="exp-format">
-            <option value="csv">CSV</option>
+          <select id="exp-format" onchange="expPlaceholder()">
+            <option value="lines" selected>Plain text — one per line</option>
+            <option value="csv">CSV (with header row)</option>
             <option value="json">JSON</option>
             <option value="reqif">ReqIF (XML)</option>
           </select></div>
       </div>
       <textarea id="exp-text" spellcheck="false" style="min-height:130px"
-        placeholder="Paste CSV (with header row) or JSON array content here..."></textarea>
+        placeholder="Paste one requirement per line, e.g.&#10;The system shall log every error to the audit trail.&#10;The operator shall be able to acknowledge an alarm within 2 seconds."></textarea>
     </div>
     <div class="controls">
       <div class="ctl"><label for="exp-similarity">Similarity</label>
-        <select id="exp-similarity" title="how elements are compared">
+        <select id="exp-similarity" title="how two subject/object spans are compared">
           <option value="lexical" selected>lexical (no deps)</option>
           <option value="embedding">BERT embedding</option>
         </select></div>
-      <div class="ctl"><label for="exp-threshold">Threshold</label>
-        <input id="exp-threshold" class="num" type="number" min="0" max="1" step="0.05" value="0.6"></div>
+      <div class="ctl"><label for="exp-threshold">Threshold <span id="exp-thr-val" class="thr-val">0.60</span></label>
+        <input id="exp-threshold" type="range" min="0" max="1" step="0.05" value="0.6"
+               style="width:130px" oninput="$('exp-thr-val').textContent=(+this.value).toFixed(2)"></div>
       <button class="primary" id="exp-btn" style="align-self:flex-end">Analyze &rarr;</button>
     </div>
+    <details class="paramhelp">
+      <summary>What do these settings mean?</summary>
+      <ul>
+        <li><b>Similarity</b> — how two subject/object phrases are compared.
+          <b>lexical</b> uses word overlap + character similarity (instant, no
+          dependencies). <b>BERT embedding</b> compares meaning (catches synonyms)
+          but needs PyTorch + transformers installed.</li>
+        <li><b>Threshold</b> — the similarity cut-off, 0 to 1. Two requirements are
+          linked only when a shared subject/object scores at or above this value.
+          <b>Higher = stricter</b> (fewer, more confident links); lower surfaces
+          more, looser matches. 0.6 is a balanced default.</li>
+      </ul>
+    </details>
   </section>
 
+  <div id="exp-warn"></div>
   <div id="exp-error"></div>
 
   <section class="card" id="exportcard" hidden>
@@ -285,17 +353,314 @@
         <span class="grp">knowledge graph</span>
         <button class="ghost" onclick="dlExport('graphml')" title="Consolidated element-level GraphML">GraphML</button>
         <button class="ghost" onclick="dlExport('mermaid')">Mermaid</button>
-        <button class="ghost" onclick="dlExport('turtle')">Turtle</button>
+        <button class="ghost" onclick="dlExport('turtle')" title="Connections ontology (rg:)">Turtle</button>
+        <button class="ghost" onclick="dlExport('req_turtle')" title="Requirements ontology (reqont:)">Req Turtle</button>
         <button class="ghost" onclick="dlExport('cypher')">Cypher</button>
       </div>
     </div>
     <div id="exp-summary" style="margin:6px 0 12px;color:var(--muted);font-size:13px"></div>
+    <div class="graph-legend" id="exp-graph-legend">
+      <span class="ll"><span class="dot" style="background:var(--ok)"></span>clean</span>
+      <span class="ll"><span class="dot" style="background:#E5A020"></span>weak words</span>
+      <span class="ll"><span class="dot" style="background:var(--bad)"></span>non-atomic</span>
+      <span class="ll"><span class="ln" style="background:#185FA5"></span>shared SUBJECT</span>
+      <span class="ll"><span class="ln" style="background:#0F6E56"></span>shared OBJECT</span>
+      <span class="ll" style="color:var(--muted)">thicker line = stronger match</span>
+    </div>
     <div id="exp-connwrap"><svg id="exp-conngraph"></svg></div>
     <div style="overflow-x:auto">
       <table id="exp-table">
         <thead id="exp-thead"></thead>
         <tbody id="exp-tbody"></tbody>
       </table>
+    </div>
+    <details class="paramhelp" style="margin-top:14px">
+      <summary>What do the quality columns mean?</summary>
+      <ul>
+        <li><b>type</b> — requirement category inferred from keywords: functional,
+          performance, interface, safety, or usability.</li>
+        <li><b>ears pattern</b> — EARS clause shape from the condition:
+          <em>ubiquitous</em> (always active), <em>event-driven (WHEN)</em>,
+          <em>state-driven (WHILE)</em>, <em>unwanted behaviour (IF/THEN)</em>, or
+          <em>optional feature (WHERE)</em>.</li>
+        <li><b>weak words</b> — vague/unverifiable terms (fast, robust,
+          user-friendly, optimal, approximately…) that make a requirement
+          ambiguous. Empty is good.</li>
+        <li><b>non-atomic</b> — the sentence packs several actions joined by
+          <em>and/or</em>; it should usually be split so each can be tested
+          independently.</li>
+        <li><b>subject / object / condition / process / constraint</b> — the parsed
+          IREB-Rupp role spans extracted from each requirement; these drive the
+          connections above (requirements sharing a similar subject/object link).</li>
+      </ul>
+      <div class="hint" style="display:block;margin-top:4px">
+        Other smells (passive voice, missing modality, vague quantifier, compound)
+        are computed too and appear in the per-requirement view of the top panel.
+      </div>
+    </details>
+  </section>
+
+  <!-- ── Compare Model vs Requirements ──────────────────────────── -->
+  <section class="card">
+    <h2>Compare model vs requirements</h2>
+    <div class="hint" style="margin:0 0 10px;display:block">
+      Paste a <b>SysML v2 model</b> and a set of <b>requirements</b> to check semantic
+      coverage. The model's structural and behavioural elements (parts, actions, states,
+      attributes) are matched against the parsed IREB roles from each requirement.
+      You get: overall <em>semantic match %</em>, <em>model coverage</em> (model
+      elements traced to requirements), <em>requirement coverage</em> (requirements
+      reflected in the model), and a per-element gap report.
+    </div>
+    <div class="cmp-two-col">
+      <div>
+        <div class="ctl" style="margin-bottom:6px">
+          <label for="cmp-model">SysML v2 model</label>
+        </div>
+        <textarea id="cmp-model" spellcheck="false" style="min-height:200px;width:100%"
+          placeholder="package automotive {&#10;  part def Vehicle { attribute speed : Real; }&#10;  part def BrakeSystem { attribute pressure : Real; }&#10;  action def ApplyBrakes { in pedal : Real; out force : Real; }&#10;  state def BrakeState { state idle; state active; }&#10;}"></textarea>
+      </div>
+      <div>
+        <div class="controls" style="margin:0 0 6px;gap:8px">
+          <div class="ctl" style="flex:1">
+            <label for="cmp-req-format">Requirements format</label>
+            <select id="cmp-req-format">
+              <option value="plain" selected>Plain text — one per line</option>
+              <option value="csv">CSV (with header row)</option>
+              <option value="json">JSON array</option>
+            </select>
+          </div>
+        </div>
+        <textarea id="cmp-reqs" spellcheck="false" style="min-height:170px;width:100%"
+          placeholder="The vehicle shall respond to brake commands within 200 ms.&#10;The braking system shall decelerate the vehicle at 5 m/s&sup2;.&#10;When the system is idle, the vehicle shall not apply brake force."></textarea>
+      </div>
+    </div>
+    <div class="controls">
+      <div class="ctl"><label for="cmp-sim">Similarity</label>
+        <select id="cmp-sim">
+          <option value="lexical" selected>lexical (no deps)</option>
+          <option value="embedding">BERT embedding</option>
+        </select></div>
+      <div class="ctl"><label>Threshold <span id="cmp-thr-val" class="thr-val">0.60</span></label>
+        <input id="cmp-thr" type="range" min="0" max="1" step="0.05" value="0.6"
+               style="width:130px" oninput="$('cmp-thr-val').textContent=(+this.value).toFixed(2)"></div>
+      <div class="ctl"><label>Roles</label>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;padding-top:4px">
+          <label style="font-size:13px;display:flex;gap:5px;align-items:center;text-transform:none;font-weight:400"><input type="checkbox" id="cmp-role-subject" checked> SUBJECT</label>
+          <label style="font-size:13px;display:flex;gap:5px;align-items:center;text-transform:none;font-weight:400"><input type="checkbox" id="cmp-role-process" checked> PROCESS</label>
+          <label style="font-size:13px;display:flex;gap:5px;align-items:center;text-transform:none;font-weight:400"><input type="checkbox" id="cmp-role-object" checked> OBJECT</label>
+          <label style="font-size:13px;display:flex;gap:5px;align-items:center;text-transform:none;font-weight:400"><input type="checkbox" id="cmp-role-condition" checked> CONDITION</label>
+        </div>
+      </div>
+      <button class="primary" id="cmp-btn" style="align-self:flex-end">Compare &rarr;</button>
+    </div>
+    <details class="paramhelp">
+      <summary>What do these settings mean?</summary>
+      <ul>
+        <li><b>Similarity</b> — <b>lexical</b> compares word overlap and character patterns (instant, no dependencies). <b>BERT embedding</b> compares semantic meaning and catches synonyms (e.g. "decelerate" ↔ "slow down") but needs PyTorch + transformers installed.</li>
+        <li><b>Threshold</b> — minimum similarity score (0–1) for a model element to count as <em>matched</em> by a requirement. Higher = stricter; 0.6 is a balanced default. Try 0.4 if results look too sparse.</li>
+        <li><b>Roles</b> — which semantic role buckets to compare. <b>SUBJECT</b> = structural entities (parts, part defs); <b>PROCESS</b> = actions/behaviors (action defs); <b>OBJECT</b> = attributes/data; <b>CONDITION</b> = states and transitions.</li>
+        <li><b>Semantic match</b> — F1-like harmonic mean of model coverage and requirement coverage. Penalises imbalance: 90% model + 10% req → only 18% match.</li>
+        <li><b>Model coverage</b> — fraction of SysML model elements that appear in at least one requirement.</li>
+        <li><b>Requirement coverage</b> — fraction of requirement semantic elements that are reflected in the model.</li>
+      </ul>
+    </details>
+  </section>
+
+  <div id="cmp-warn"></div>
+  <div id="cmp-error"></div>
+
+  <section class="card" id="cmpcard" hidden>
+    <div class="row-head">
+      <h2 style="margin:0">Comparison results</h2>
+      <span class="spacer"></span>
+      <div class="exports">
+        <span class="grp">download</span>
+        <button class="ghost" onclick="dlCompare('json')">JSON</button>
+        <span class="sep"></span>
+        <span class="grp">knowledge graph</span>
+        <button class="ghost" onclick="dlCompare('graphml')">GraphML</button>
+        <button class="ghost" onclick="dlCompare('mermaid')">Mermaid</button>
+      </div>
+    </div>
+    <div class="kpis" id="cmp-kpis" style="margin:10px 0 14px"></div>
+    <p class="cmp-section-head">Role breakdown</p>
+    <table style="margin-bottom:16px">
+      <thead><tr>
+        <th>Role</th><th>Model coverage</th><th>Req coverage</th><th>Score</th>
+        <th style="width:60px"># model</th><th style="width:60px"># req</th>
+      </tr></thead>
+      <tbody id="cmp-role-tbody"></tbody>
+    </table>
+    <p class="cmp-section-head">Matches
+      <span id="cmp-match-count" style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--muted)"></span>
+    </p>
+    <div style="overflow-x:auto;margin-bottom:16px">
+      <table>
+        <thead><tr>
+          <th>Model element</th><th style="width:100px">Role</th>
+          <th>Matched requirement text</th><th style="width:72px">Score</th>
+        </tr></thead>
+        <tbody id="cmp-matches"></tbody>
+      </table>
+    </div>
+    <p class="cmp-section-head">Coverage gaps</p>
+    <div class="cmp-two-col">
+      <div class="gap-panel">
+        <h4>Model elements not covered by requirements</h4>
+        <div id="cmp-unmatched-model"></div>
+      </div>
+      <div class="gap-panel">
+        <h4>Requirements not reflected in model</h4>
+        <div id="cmp-unmatched-reqs"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Compare SysML v1 Model (XMI / Turtle) vs Requirements ──────────── -->
+  <section class="card">
+    <h2>Compare SysML v1 Model (XMI / Turtle) vs Requirements</h2>
+    <p class="muted">Context-aware semantic comparison: each element's score uses its
+    graph neighborhood (BFS hops), not just its name.
+    Confidence = 0.25 × name + 0.55 × context + 0.20 × satisfaction bonus.</p>
+
+    <!-- Format tabs -->
+    <div style="display:flex;gap:8px;margin-bottom:8px;">
+      <button class="tab-btn active" id="v1-tab-xmi" onclick="v1SetFmt('xmi')">XMI / XML</button>
+      <button class="tab-btn" id="v1-tab-ttl" onclick="v1SetFmt('turtle')">Turtle / RDF</button>
+    </div>
+
+    <div class="cmp-two-col">
+      <div style="display:flex;flex-direction:column;gap:6px;flex:1">
+        <label for="v1-model"><b>SysML v1 model</b></label>
+        <textarea id="v1-model" rows="14" placeholder="Paste XMI or Turtle here…"></textarea>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px;flex:1">
+        <label for="v1-reqs">
+          <b>Requirements</b>
+          <select id="v1-req-format" style="margin-left:8px;font-size:.85rem">
+            <option value="plain">Plain text</option>
+            <option value="csv">CSV</option>
+            <option value="json">JSON</option>
+          </select>
+        </label>
+        <textarea id="v1-reqs" rows="14" placeholder="One requirement per line…"></textarea>
+      </div>
+    </div>
+
+    <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-top:10px">
+      <label style="display:flex;align-items:center;gap:6px">
+        Threshold <input type="range" id="v1-thr" min="0" max="1" step="0.05" value="0.5"
+          oninput='$("v1-thr-val").textContent=parseFloat(this.value).toFixed(2)'>
+        <span id="v1-thr-val">0.50</span>
+      </label>
+      <label style="display:flex;align-items:center;gap:6px">
+        Context hops
+        <input type="range" id="v1-hops" min="0" max="3" step="1" value="2"
+          oninput='$("v1-hops-val").textContent=this.value'>
+        <span id="v1-hops-val">2</span>
+      </label>
+      <label>Similarity
+        <select id="v1-sim">
+          <option value="lexical" selected>lexical</option>
+          <option value="embedding">embedding (needs torch)</option>
+        </select>
+      </label>
+      <fieldset style="border:1px solid #ccc;padding:4px 10px;border-radius:6px">
+        <legend style="font-size:.8rem">Roles</legend>
+        <label><input type="checkbox" class="v1-role" value="SUBJECT"   checked> Subject</label>
+        <label><input type="checkbox" class="v1-role" value="PROCESS"   checked> Process</label>
+        <label><input type="checkbox" class="v1-role" value="OBJECT"    checked> Object</label>
+        <label><input type="checkbox" class="v1-role" value="CONDITION" checked> Condition</label>
+      </fieldset>
+      <button class="primary" id="v1-btn" style="align-self:flex-end">Compare v1 &rarr;</button>
+    </div>
+
+    <details style="margin-top:8px">
+      <summary style="cursor:pointer;color:var(--accent);font-size:.85rem">How context hops work</summary>
+      <p style="font-size:.85rem;margin-top:4px">
+        Each model element is scored not just by its name but by a <em>neighborhood context
+        string</em>: BFS up to N hops expands the element's local graph, concatenating
+        neighbor names and documentation. A <em>satisfaction bonus</em> (0.20 weight) is
+        added when the model already contains a satisfy/refine link from the element to a
+        requirement whose text matches the input requirement. Higher hops → richer context
+        but slower scoring.
+      </p>
+    </details>
+
+    <div id="v1-error" class="error" hidden></div>
+    <div id="v1-warn" class="warn" hidden></div>
+  </section>
+
+  <section class="card" id="v1cmpcard" hidden>
+    <h2>SysML v1 Comparison Results</h2>
+    <div class="cmp-section-head">KPI Summary</div>
+    <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px" id="v1-kpis"></div>
+
+    <div class="cmp-section-head">Role Breakdown</div>
+    <div style="overflow-x:auto;margin-bottom:16px">
+      <table style="border-collapse:collapse;width:100%;font-size:.88rem">
+        <thead><tr>
+          <th style="text-align:left;padding:4px 8px">Role</th>
+          <th style="padding:4px 8px">Model cov.</th>
+          <th style="padding:4px 8px">Req cov.</th>
+          <th style="padding:4px 8px">Score</th>
+          <th style="padding:4px 8px">#Model</th>
+          <th style="padding:4px 8px">#Req</th>
+        </tr></thead>
+        <tbody id="v1-role-body"></tbody>
+      </table>
+    </div>
+
+    <div class="cmp-section-head">Matches — Confidence Decomposition</div>
+    <div style="overflow-x:auto;margin-bottom:16px">
+      <table style="border-collapse:collapse;width:100%;font-size:.85rem">
+        <thead><tr>
+          <th style="text-align:left;padding:4px 8px">Model element</th>
+          <th style="text-align:left;padding:4px 8px">Role</th>
+          <th style="text-align:left;padding:4px 8px">Req element</th>
+          <th style="padding:4px 8px">Name</th>
+          <th style="padding:4px 8px">Context</th>
+          <th style="padding:4px 8px">Sat</th>
+          <th style="padding:4px 8px">Confidence</th>
+        </tr></thead>
+        <tbody id="v1-matches"></tbody>
+      </table>
+    </div>
+
+    <!-- Tabs: Gaps | Ontology View -->
+    <div style="display:flex;gap:8px;margin-bottom:8px">
+      <button class="tab-btn active" id="v1-res-tab-gaps"
+        onclick="v1ShowResTab('gaps')">Gaps</button>
+      <button class="tab-btn" id="v1-res-tab-ontology"
+        onclick="v1ShowResTab('ontology')">Ontology View</button>
+    </div>
+
+    <div id="v1-tab-gaps-panel">
+      <div style="display:flex;gap:16px;flex-wrap:wrap">
+        <div class="gap-panel" style="flex:1">
+          <h4>Model elements not covered by requirements</h4>
+          <div id="v1-unmatched-model"></div>
+        </div>
+        <div class="gap-panel" style="flex:1">
+          <h4>Requirements not reflected in model</h4>
+          <div id="v1-unmatched-reqs"></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="v1-tab-ontology-panel" hidden>
+      <div class="cmp-section-head">Ontology Comparison (IREB roles vs SysML element types)</div>
+      <pre id="v1-ontology-mermaid" style="font-size:.8rem;overflow:auto;background:#f5f5f5;
+           padding:12px;border-radius:6px;max-height:300px"></pre>
+    </div>
+
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:16px">
+      <button onclick="dlV1('json')">⬇ JSON</button>
+      <button onclick="dlV1('graphml')">⬇ GraphML (match)</button>
+      <button onclick="dlV1('kg_graphml')">⬇ KG GraphML (full model)</button>
+      <button onclick="dlV1('model_turtle')">⬇ Model Turtle</button>
+      <button onclick="dlV1('mermaid')">⬇ Mermaid</button>
+      <button onclick="dlV1('ontology_graphml')">⬇ Ontology GraphML</button>
     </div>
   </section>
 </main>
@@ -454,7 +819,7 @@ function renderTiles(tiles){
             color:${c.tx}">${r}</span>`;}).join("");
 }
 
-function esc(s){ return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+function esc(s){ s=String(s||""); return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
 
 /* ---- graph: tidy tree layout in plain SVG ---- */
 const NW = 158, NH = 60, HGAP = 18, VGAP = 56;
@@ -568,24 +933,41 @@ function bootSet(){
 }
 
 async function parseSet(){
+  showSetError(null); showSetWarn(null);
   const lines = $("set-text").value.split("\n").map(s => s.trim()).filter(Boolean);
   if(!lines.length){ showSetError("enter at least one requirement (one per line)"); return; }
-  const body = {texts: lines, template: $("template").value, backend: $("backend").value,
-                similarity: $("set-similarity").value, threshold: +$("set-threshold").value};
-  const r = await fetch("/api/connections", {method:"POST",
-      headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)});
-  const d = await r.json();
-  if(d.error){ showSetError(d.error); return; }
-  showSetError(null);
-  setLast = d;
-  $("setcard").hidden = false;
-  renderConnGraph(d);
-  renderConnTable(d);
+  const btn = $("set-parse"); btn.disabled = true; const lbl = btn.textContent;
+  btn.textContent = "Finding…";
+  try {
+    const body = {texts: lines, template: $("template").value, backend: $("backend").value,
+                  similarity: $("set-similarity").value, threshold: +$("set-threshold").value};
+    const r = await fetch("/api/connections", {method:"POST",
+        headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)});
+    const d = await r.json();
+    if(d.error){ showSetError(d.error); return; }
+    showSetWarn(d.warnings);
+    setLast = d;
+    $("setcard").hidden = false;
+    renderConnGraph(d);
+    renderConnTable(d);
+  } catch(e){
+    showSetError("network error: " + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = lbl;
+  }
 }
 
 function showSetError(msg){
   $("set-error").style.display = msg ? "block" : "none";
   $("set-error").textContent = msg || "";
+}
+
+function showSetWarn(warnings){
+  const box = $("set-warn");
+  if(!warnings || !warnings.length){ box.style.display = "none"; box.innerHTML = ""; return; }
+  box.style.display = "block";
+  box.innerHTML = "&#9888; " + (warnings.length === 1 ? esc(warnings[0])
+    : "<b>Heads up:</b><ul>" + warnings.map(w => `<li>${esc(w)}</li>`).join("") + "</ul>");
 }
 
 function renderConnGraph(d){
@@ -665,21 +1047,33 @@ function expTab(tab){
   $("exp-tab-paste").className = "tab-btn" + (tab === "paste" ? " active" : "");
 }
 
+const EXP_PLACEHOLDERS = {
+  lines: "Paste one requirement per line, e.g.\nThe system shall log every error to the audit trail.\nThe operator shall be able to acknowledge an alarm within 2 seconds.",
+  csv:   "Paste CSV with a header row, e.g.\nid,text,rationale\nR1,The system shall log every error.,audit trail",
+  json:  'Paste a JSON array, e.g.\n[{"id":"R1","text":"The system shall log every error.","rationale":"audit"}]',
+  reqif: "Paste ReqIF XML content here...",
+};
+function expPlaceholder(){
+  $("exp-text").placeholder = EXP_PLACEHOLDERS[$("exp-format").value] || "";
+}
+
 function bootExport(){
   $("exp-btn").onclick = parseExport;
+  expTab("paste");
+  expPlaceholder();
   $("exp-file").addEventListener("change", () => {
     if($("exp-file").files.length) parseExport();
   });
 }
 
 async function parseExport(){
-  showExpError(null);
+  showExpError(null); showExpWarn(null);
   const fileInput = $("exp-file");
   const pasteVisible = $("exp-paste-pane").style.display !== "none";
 
   if(pasteVisible){
     const content = $("exp-text").value.trim();
-    if(!content){ showExpError("please paste some content"); return; }
+    if(!content){ showExpError("nothing to analyze — paste some text first, or switch to the Upload file tab"); return; }
     const body = {format: $("exp-format").value, content,
                   encoding: "utf-8",
                   similarity: $("exp-similarity").value,
@@ -737,12 +1131,30 @@ function showExpError(msg){
   $("exp-error").textContent = msg || "";
 }
 
+function showExpWarn(warnings){
+  const box = $("exp-warn");
+  if(!warnings || !warnings.length){ box.style.display = "none"; box.innerHTML = ""; return; }
+  box.style.display = "block";
+  box.innerHTML = "&#9888; " + (warnings.length === 1 ? esc(warnings[0])
+    : "<b>Heads up:</b><ul>" + warnings.map(w => `<li>${esc(w)}</li>`).join("") + "</ul>");
+}
+
 function renderExportResults(d){
-  $("exp-summary").innerHTML =
-    `<strong>${d.n_requirements}</strong> requirement${d.n_requirements!==1?"s":""} &nbsp;·&nbsp; ` +
-    `<strong>${d.n_connections}</strong> cross-requirement connection${d.n_connections!==1?"s":""} ` +
-    `&nbsp;·&nbsp; backend: <em>${d.backend}</em> &nbsp;·&nbsp; ` +
-    `similarity: <em>${d.similarity}</em> (threshold ${d.threshold})`;
+  showExpWarn(d.warnings);
+  if(!d.n_connections && d.n_requirements >= 2){
+    $("exp-summary").innerHTML =
+      `<strong>${d.n_requirements}</strong> requirements · ` +
+      `<strong>no connections</strong> at threshold ${d.threshold} ` +
+      `— try lowering the threshold or switching similarity to BERT embedding.`;
+  } else {
+    $("exp-summary").innerHTML =
+      `<strong>${d.n_requirements}</strong> requirement${d.n_requirements!==1?"s":""} &nbsp;·&nbsp; ` +
+      `<strong>${d.n_connections}</strong> cross-requirement connection${d.n_connections!==1?"s":""} ` +
+      `&nbsp;·&nbsp; backend: <em>${esc(d.backend)}</em> &nbsp;·&nbsp; ` +
+      `similarity: <em>${esc(d.similarity)}</em> (threshold ${d.threshold})`;
+  }
+  // the color legend only makes sense once there's a graph to read
+  $("exp-graph-legend").style.display = (d.n_requirements >= 2) ? "flex" : "none";
   renderExportGraph(d);
   renderExportTable(d);
 }
@@ -773,7 +1185,7 @@ function renderExportGraph(d){
     const qcol = r.non_atomic ? "var(--bad)" :
                  (r.weak_words ? "#E5A020" : "var(--ok)");
     nodes += `<g><circle cx="${p.x}" cy="${p.y}" r="7" fill="${qcol}"/>
-      <title>${esc(r.id)}: ${esc(r.text)}${r.type ? " ["+r.type+"]" : ""}${r.weak_words ? " ⚠ "+r.weak_words : ""}</title>
+      <title>${esc(r.id)}: ${esc(r.text)}${r.type ? " ["+esc(r.type)+"]" : ""}${r.weak_words ? " ⚠ "+esc(r.weak_words) : ""}</title>
       <text x="${p.x}" y="${p.y - 12}" text-anchor="middle" font-size="11"
         font-weight="600" fill="#2c2c2a">${esc(r.id)}</text>
       <text x="${p.x}" y="${p.y + 18}" text-anchor="middle" font-size="9.5"
@@ -830,10 +1242,148 @@ function dlExport(kind){
     graphml:[expLast.graphml, "requirements_consolidated.graphml", "application/xml"],
     mermaid:[expLast.mermaid, "requirements_connections.mmd", "text/plain"],
     turtle: [expLast.turtle, "requirements_connections.ttl", "text/turtle"],
+    req_turtle: [expLast.req_turtle, "requirements_ontology.ttl", "text/turtle"],
     cypher: [expLast.cypher, "requirements_connections.cypher", "text/plain"],
   };
-  const [data, name, mime] = map[kind];
+  const entry = map[kind];
+  if(!entry) return;
+  const [data, name, mime] = entry;
   if(data == null) return;
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([data], {type:mime}));
+  a.download = name; a.click(); URL.revokeObjectURL(a.href);
+}
+
+/* ── Compare Model vs Requirements ──────────────────────────────── */
+let cmpLast = null;
+
+function bootCompare(){
+  $("cmp-btn").onclick = parseCompare;
+}
+
+async function parseCompare(){
+  showCmpError(null); showCmpWarn(null);
+  const modelContent = $("cmp-model").value.trim();
+  const reqContent   = $("cmp-reqs").value.trim();
+  if(!modelContent){ showCmpError("paste a SysML v2 model first"); return; }
+  if(!reqContent)  { showCmpError("paste requirements to compare against"); return; }
+  const roles = ["SUBJECT","PROCESS","OBJECT","CONDITION"].filter(
+    r => $("cmp-role-" + r.toLowerCase()).checked);
+  if(!roles.length){ showCmpError("select at least one role to compare"); return; }
+  const btn = $("cmp-btn"); btn.disabled = true; const lbl = btn.textContent;
+  btn.textContent = "Comparing…";
+  try {
+    const body = {model_content: modelContent, req_content: reqContent,
+                  req_format: $("cmp-req-format").value,
+                  threshold: +$("cmp-thr").value,
+                  similarity: $("cmp-sim").value,
+                  roles,
+                  template: $("template").value, backend: $("backend").value};
+    const r = await fetch("/api/compare", {method:"POST",
+        headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)});
+    const d = await r.json();
+    if(d.error){ showCmpError(d.error); return; }
+    cmpLast = d;
+    $("cmpcard").hidden = false;
+    renderCompareResults(d);
+  } catch(e){
+    showCmpError("network error: " + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = lbl;
+  }
+}
+
+function showCmpError(msg){
+  $("cmp-error").style.display = msg ? "block" : "none";
+  $("cmp-error").textContent = msg || "";
+}
+
+function showCmpWarn(warnings){
+  const box = $("cmp-warn");
+  if(!warnings || !warnings.length){ box.style.display="none"; box.innerHTML=""; return; }
+  box.style.display="block";
+  box.innerHTML = "⚠ " + (warnings.length===1 ? esc(warnings[0])
+    : "<b>Heads up:</b><ul>" + warnings.map(w=>`<li>${esc(w)}</li>`).join("") + "</ul>");
+}
+
+function cmpScoreCls(v){ return v>=0.8?"good":(v<0.6?"bad":""); }
+function cmpPct(v){ return (v*100).toFixed(0)+"%"; }
+
+function cmpScoreBar(v){
+  const col = v>=0.8?"var(--ok)":(v<0.6?"var(--bad)":"#E5A020");
+  const w = Math.max(4, Math.round(v*64));
+  return `<span class="score-bar" style="width:${w}px;background:${col}"></span>`;
+}
+
+function cmpRoleChip(role){
+  const c = ROLE_C[role] || {bg:"#eee",bd:"#bbb",tx:"#333"};
+  return `<span style="font-size:11px;padding:2px 9px;border-radius:99px;
+    border:1px solid ${c.bd};background:${c.bg};color:${c.tx}">${esc(role)}</span>`;
+}
+
+function renderCompareResults(d){
+  showCmpWarn(d.warnings);
+  $("cmp-kpis").innerHTML =
+    kpiCard(cmpPct(d.semantic_match), "Semantic match",
+            "F1: harmonic mean of both coverages", cmpScoreCls(d.semantic_match)) +
+    kpiCard(cmpPct(d.model_coverage), "Model coverage",
+            d.n_model_elements + " model elements", cmpScoreCls(d.model_coverage)) +
+    kpiCard(cmpPct(d.req_coverage), "Req coverage",
+            d.n_req_elements + " req elements", cmpScoreCls(d.req_coverage)) +
+    kpiCard(d.matches.length, "Matches above threshold", "", "");
+
+  // Role breakdown table
+  const rb = d.role_breakdown || {};
+  $("cmp-role-tbody").innerHTML = Object.entries(rb).map(([role, v]) =>
+    `<tr><td>${cmpRoleChip(role)}</td>
+     <td><div class="score-bar-wrap">${cmpScoreBar(v.model_coverage)}<span>${cmpPct(v.model_coverage)}</span></div></td>
+     <td><div class="score-bar-wrap">${cmpScoreBar(v.req_coverage)}<span>${cmpPct(v.req_coverage)}</span></div></td>
+     <td><div class="score-bar-wrap">${cmpScoreBar(v.score)}<span>${cmpPct(v.score)}</span></div></td>
+     <td style="color:var(--muted)">${v.n_model}</td>
+     <td style="color:var(--muted)">${v.n_req}</td></tr>`
+  ).join("") || `<tr><td colspan="6" style="color:var(--muted)">no role data</td></tr>`;
+
+  // Match table
+  $("cmp-match-count").textContent = d.matches.length
+    ? `(${d.matches.length} shown)` : "";
+  $("cmp-matches").innerHTML = d.matches.map(m =>
+    `<tr>
+      <td><b>${esc(m.model_name)}</b>
+        <span style="font-size:11px;color:var(--muted);margin-left:5px">${esc(m.model_element_type||"")}</span>
+        ${m.model_package?`<span style="font-size:11px;color:var(--muted)"> &middot; ${esc(m.model_package)}</span>`:""}
+      </td>
+      <td>${cmpRoleChip(m.model_role)}</td>
+      <td>${esc(m.req_text)} <span style="font-size:11px;color:var(--muted)">[${esc(m.req_id)}]</span></td>
+      <td><b>${m.score.toFixed(2)}</b></td></tr>`
+  ).join("") || `<tr><td colspan="4" style="color:var(--muted)">
+      no matches found &mdash; try lowering the threshold or switching to BERT embedding</td></tr>`;
+
+  // Unmatched model elements
+  $("cmp-unmatched-model").innerHTML = d.unmatched_model.length
+    ? `<ul style="margin:0;padding-left:18px;line-height:1.8">${d.unmatched_model.map(e =>
+        `<li><b>${esc(e.name)}</b>
+          <span style="font-size:11px;color:var(--muted)"> &mdash; ${esc(e.element_type)}${e.package?" &middot; "+esc(e.package):""}</span></li>`
+      ).join("")}</ul>`
+    : `<span style="color:var(--ok)">✓ all model elements are covered</span>`;
+
+  // Unmatched req elements
+  $("cmp-unmatched-reqs").innerHTML = d.unmatched_reqs.length
+    ? `<ul style="margin:0;padding-left:18px;line-height:1.8">${d.unmatched_reqs.map(e =>
+        `<li>${cmpRoleChip(e.role)} ${esc(e.text)}
+          <span style="font-size:11px;color:var(--muted)"> [${esc(e.req_id)}]</span></li>`
+      ).join("")}</ul>`
+    : `<span style="color:var(--ok)">✓ all requirements are reflected in the model</span>`;
+}
+
+function dlCompare(kind){
+  if(!cmpLast) return;
+  const map = {
+    json:   [JSON.stringify(cmpLast, null, 2), "model_req_comparison.json", "application/json"],
+    graphml:[cmpLast.graphml, "model_req_comparison.graphml", "application/xml"],
+    mermaid:[cmpLast.mermaid, "model_req_comparison.mmd", "text/plain"],
+  };
+  const [data, name, mime] = map[kind];
+  if(data==null) return;
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([data], {type:mime}));
   a.download = name; a.click(); URL.revokeObjectURL(a.href);
@@ -842,6 +1392,172 @@ function dlExport(kind){
 boot();
 bootSet();
 bootExport();
+bootCompare();
+bootCompareV1();
+
+// ── SysML v1 compare ──────────────────────────────────────────────────────
+
+let v1Last = null;
+let v1ModelFmt = "xmi";
+
+function v1SetFmt(fmt) {
+  v1ModelFmt = fmt;
+  ["xmi","ttl"].forEach(f => {
+    const btn = $("v1-tab-" + f);
+    if (btn) btn.classList.toggle("active", f === fmt);
+  });
+  const ta = $("v1-model");
+  if (fmt === "xmi") {
+    ta.placeholder = 'Paste SysML v1 XMI here…\n\n<uml:Model xmlns:uml="http://www.eclipse.org/uml2/5.0.0/UML" …>';
+  } else {
+    ta.placeholder = 'Paste Turtle/RDF here…\n\n@prefix sysml: <http://www.omg.org/spec/SysML/> .\n:BrakeSystem a sysml:Block ; rdfs:label "BrakeSystem" .';
+  }
+}
+
+function bootCompareV1() {
+  $("v1-btn").onclick = parseCompareV1;
+}
+
+async function parseCompareV1() {
+  const btn = $("v1-btn"); btn.disabled = true;
+  const lbl = btn.textContent; btn.textContent = "Comparing…";
+  $("v1-error").hidden = true;
+  $("v1-warn").hidden = true;
+  try {
+    const roles = [...document.querySelectorAll(".v1-role")]
+      .filter(cb => cb.checked).map(cb => cb.value);
+    const payload = {
+      model_content: $("v1-model").value,
+      model_format:  v1ModelFmt,
+      req_content:   $("v1-reqs").value,
+      req_format:    $("v1-req-format").value,
+      threshold:     parseFloat($("v1-thr").value),
+      context_hops:  parseInt($("v1-hops").value),
+      similarity:    $("v1-sim").value,
+      roles,
+    };
+    const resp = await fetch("/api/compare-v1", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(payload),
+    });
+    const d = await resp.json();
+    if (d.error) { showV1Error(d.error); return; }
+    if (d.warnings && d.warnings.length) showV1Warn(d.warnings);
+    v1Last = d;
+    renderCompareV1Results(d);
+  } catch(e) { showV1Error(String(e)); }
+  finally { btn.disabled = false; btn.textContent = lbl; }
+}
+
+function showV1Error(msg) {
+  const el = $("v1-error"); el.textContent = msg; el.hidden = false;
+}
+function showV1Warn(ws) {
+  const el = $("v1-warn"); el.textContent = ws.join(" · "); el.hidden = false;
+}
+
+function v1ScoreCls(v) { return v >= 0.8 ? "good" : (v < 0.6 ? "bad" : ""); }
+function v1Pct(v) { return (v * 100).toFixed(0) + "%"; }
+function v1ScoreBar(v) {
+  const color = v >= 0.8 ? "var(--ok)" : (v < 0.6 ? "var(--bad)" : "#e6a817");
+  return `<div class="score-bar-wrap"><div class="score-bar" style="width:${(v*100).toFixed(0)}%;background:${color}"></div></div>`;
+}
+
+function renderCompareV1Results(d) {
+  // KPI tiles
+  $("v1-kpis").innerHTML =
+    kpiCard(v1Pct(d.semantic_match), "Semantic Match",
+            "F1: harmonic mean of coverages", v1ScoreCls(d.semantic_match)) +
+    kpiCard(v1Pct(d.model_coverage), "Model Coverage",
+            d.n_model_elements + " model elements", v1ScoreCls(d.model_coverage)) +
+    kpiCard(v1Pct(d.req_coverage), "Req Coverage",
+            d.n_req_elements + " req elements", v1ScoreCls(d.req_coverage)) +
+    kpiCard((d.matches||[]).length, "Matches", "above threshold", "");
+
+  // Role breakdown
+  const rb = d.role_breakdown || {};
+  $("v1-role-body").innerHTML = Object.entries(rb).map(([role, s]) =>
+    `<tr>
+      <td style="padding:4px 8px">${role}</td>
+      <td style="text-align:center;padding:4px 8px">${v1Pct(s.model_coverage)}${v1ScoreBar(s.model_coverage)}</td>
+      <td style="text-align:center;padding:4px 8px">${v1Pct(s.req_coverage)}${v1ScoreBar(s.req_coverage)}</td>
+      <td style="text-align:center;padding:4px 8px">${v1Pct(s.score)}</td>
+      <td style="text-align:center;padding:4px 8px">${s.n_model}</td>
+      <td style="text-align:center;padding:4px 8px">${s.n_req}</td>
+    </tr>`
+  ).join("");
+
+  // Matches (confidence decomposition table)
+  const matches = d.matches || [];
+  $("v1-matches").innerHTML = matches.slice(0, 40).map(m => {
+    const sat = m.via_satisfaction ? "✓" : "";
+    const reqTxt = m.req_text.length > 50 ? m.req_text.slice(0,47)+"…" : m.req_text;
+    return `<tr>
+      <td style="padding:4px 8px"><b>${esc(m.element_name)}</b>
+        <span style="font-size:.75rem;color:#777"> [${esc(m.stereotype||m.element_type||"")}]</span></td>
+      <td style="padding:4px 8px">${esc(m.role)}</td>
+      <td style="padding:4px 8px" title="${esc(m.req_text)}">${esc(reqTxt)}</td>
+      <td style="text-align:center;padding:4px 8px">${m.name_score.toFixed(2)}</td>
+      <td style="text-align:center;padding:4px 8px">${m.context_score.toFixed(2)}</td>
+      <td style="text-align:center;padding:4px 8px">${sat}</td>
+      <td style="text-align:center;padding:4px 8px"><b>${m.confidence.toFixed(2)}</b></td>
+    </tr>`;
+  }).join("");
+
+  // Gaps
+  const unModel = d.unmatched_model || [];
+  $("v1-unmatched-model").innerHTML = unModel.length === 0
+    ? '<p style="color:var(--ok)">All model elements covered ✓</p>'
+    : `<ul>${unModel.map(e =>
+        `<li>${esc(e.name)} <span style="font-size:.8rem;color:#777">[${esc(e.stereotype||e.element_type||e.role)}]${e.package?" in "+esc(e.package):""}</span></li>`
+      ).join("")}</ul>`;
+
+  const unReqs = d.unmatched_reqs || [];
+  $("v1-unmatched-reqs").innerHTML = unReqs.length === 0
+    ? '<p style="color:var(--ok)">All requirement elements covered ✓</p>'
+    : `<ul>${unReqs.map(r =>
+        `<li>${esc(r.req_id)} [${esc(r.role)}] ${esc(r.text.length>60?r.text.slice(0,57)+"…":r.text)}</li>`
+      ).join("")}</ul>`;
+
+  // Ontology Mermaid
+  if (d.ontology_mermaid) {
+    $("v1-ontology-mermaid").textContent = d.ontology_mermaid;
+  }
+
+  $("v1cmpcard").hidden = false;
+}
+
+function v1ShowResTab(tab) {
+  ["gaps","ontology"].forEach(t => {
+    $("v1-tab-" + t + "-panel").hidden = (t !== tab);
+    const btn = $("v1-res-tab-" + t);
+    if (btn) btn.classList.toggle("active", t === tab);
+  });
+}
+
+function dlV1(kind) {
+  if (!v1Last) return;
+  let content = "", name = "v1_compare", ext = "txt";
+  if (kind === "json") {
+    content = JSON.stringify(v1Last, null, 2); name = "v1_compare"; ext = "json";
+  } else if (kind === "graphml") {
+    content = v1Last.graphml || ""; name = "v1_match"; ext = "graphml";
+  } else if (kind === "kg_graphml") {
+    content = v1Last.kg_graphml || ""; name = "v1_model_kg"; ext = "graphml";
+  } else if (kind === "model_turtle") {
+    content = v1Last.model_turtle || ""; name = "v1_model"; ext = "ttl";
+  } else if (kind === "mermaid") {
+    content = v1Last.mermaid || ""; name = "v1_compare"; ext = "md";
+  } else if (kind === "ontology_graphml") {
+    content = v1Last.ontology_graphml || ""; name = "v1_ontology"; ext = "graphml";
+  }
+  if (!content) { alert("No content for " + kind); return; }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([content], {type: "text/plain"}));
+  a.download = name + "." + ext;
+  a.click();
+}
 </script>
 </body>
 </html>

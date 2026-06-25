@@ -718,6 +718,21 @@ def test_requirements_to_dataframe_includes_metadata_columns():
     assert df.iloc[1]["applicability"] == ""   # missing → empty string
 
 
+def test_metadata_column_collision_is_namespaced():
+    """A source attribute colliding with a reserved/parsed column (e.g. a
+    "Subject" or "Type" attribute) must be preserved under an attr_ prefix
+    rather than clobbered by the parser output (regression)."""
+    from reqgraph.io_formats import requirements_to_dataframe
+    items = [("R1", "The system shall log errors.",
+              {"subject": "USER-VALUE", "type": "mandatory", "rationale": "audit"})]
+    df = requirements_to_dataframe(items)
+    assert df.iloc[0]["attr_subject"] == "USER-VALUE"
+    assert df.iloc[0]["attr_type"] == "mandatory"
+    assert df.iloc[0]["rationale"] == "audit"        # non-colliding key unchanged
+    assert df.iloc[0]["subject"] == "The system"     # parsed element preserved
+    assert df.iloc[0]["type"] == "functional"        # computed type preserved
+
+
 def test_requirement_set_graph_stores_metadata():
     from reqgraph.corpus import build_requirement_set_graph
     items = [
@@ -778,6 +793,50 @@ def test_to_element_graphml_has_has_element_edges():
     rsg = build_requirement_set_graph(SET_REQS)
     gml = rsg.to_element_graphml()
     assert "HAS_ELEMENT" in gml
+
+
+def test_to_element_graphml_no_duplicate_node_ids_adversarial():
+    """A requirement id that looks like another's {id}__{node_id} must not
+    produce a duplicate GraphML node id (regression)."""
+    import re
+    import xml.dom.minidom
+    from reqgraph.corpus import build_requirement_set_graph
+    items = [("A", "The system shall log data."),
+             ("A__subject_1", "The pilot shall act.")]
+    gml = build_requirement_set_graph(items).to_element_graphml()
+    xml.dom.minidom.parseString(gml.encode("utf-8"))   # well-formed
+    ids = re.findall(r'<node id="([^"]*)"', gml)
+    assert len(ids) == len(set(ids)), "duplicate GraphML node ids"
+
+
+def test_build_set_graph_metadata_not_aliased_across_splits():
+    """Each split segment must get its own metadata dict (regression: they used
+    to share one object, so mutating one changed its siblings)."""
+    from reqgraph.corpus import build_requirement_set_graph
+    items = [("C1", "The system shall open the valve and the controller shall "
+                    "log the event.", {"rationale": "r"})]
+    rsg = build_requirement_set_graph(items)
+    a, b = rsg.req_ids
+    rsg.metadata[a]["mutated"] = "x"
+    assert "mutated" not in rsg.metadata[b]
+
+
+def test_gui_export_table_matches_csv_on_collision():
+    """A metadata column that collides with a parsed/reserved column must be
+    namespaced (attr_*) identically in the on-screen table and the CSV download
+    (regression: the table silently showed the parsed element instead)."""
+    import csv as _csv, io as _io
+    from reqgraph.gui import GuiState, export_request
+    buf = _io.StringIO()
+    w = _csv.writer(buf)
+    w.writerow(["id", "text", "subject"])           # 'subject' collides
+    w.writerow(["R1", "The system shall log errors.", "USER-SUBJECT"])
+    d = export_request(GuiState(), {"format": "csv", "content": buf.getvalue()})
+    row = d["requirements"][0]
+    assert row["attr_subject"] == "USER-SUBJECT"     # user value preserved
+    assert row["subject"] == "The system"            # parsed element kept too
+    csv_row = next(_csv.DictReader(_io.StringIO(d["csv_data"])))
+    assert csv_row["attr_subject"] == "USER-SUBJECT"  # table == CSV
 
 
 def test_to_element_graphml_metadata_in_req_node():
@@ -848,6 +907,32 @@ def test_cli_export_json_input(tmp_path):
     assert (tmp_path / "out.csv").exists()
 
 
+def test_cli_export_splits_compound_consistently(tmp_path):
+    """A compound row must split the same way in CSV, JSON and GraphML so the
+    three outputs describe the same requirement set (regression)."""
+    import json as _json
+    import xml.dom.minidom
+    pandas = pytest.importorskip("pandas")
+    from reqgraph.__main__ import main
+    csv_in = tmp_path / "in.csv"
+    csv_in.write_text(
+        "id,text,rationale\n"
+        "R1,The system shall open the valve and the controller shall log it.,split me\n",
+        encoding="utf-8")
+    prefix = str(tmp_path / "out")
+    rc = main(["export", str(csv_in), "--out-prefix", prefix])
+    assert rc == 0
+    df = pandas.read_csv(str(tmp_path / "out.csv"))
+    # compound R1 -> R1-1, R1-2 in every output
+    assert list(df["id"]) == ["R1-1", "R1-2"]
+    assert (df["rationale"] == "split me").all()    # metadata copied to both halves
+    rows = _json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+    assert [r["id"] for r in rows] == ["R1-1", "R1-2"]
+    gml = (tmp_path / "out.graphml").read_text(encoding="utf-8")
+    xml.dom.minidom.parseString(gml.encode("utf-8"))
+    assert 'id="R1-1"' in gml and 'id="R1-2"' in gml
+
+
 # --- GUI export_request ------------------------------------------------------
 
 def test_gui_export_request_payload(tmp_path):
@@ -875,3 +960,96 @@ def test_gui_export_request_rejects_empty():
     from reqgraph.gui import GuiState, export_request
     with pytest.raises(ReqGraphError):
         export_request(GuiState(), {"format": "csv", "content": "   "})
+
+
+# --- requirements Turtle (reqont:) export -----------------------------------
+
+def test_to_req_turtle_is_valid_rdflib_turtle():
+    """RequirementSetGraph.to_req_turtle() must produce well-formed Turtle."""
+    rdflib = pytest.importorskip("rdflib")
+    from reqgraph.corpus import build_requirement_set_graph
+    rsg = build_requirement_set_graph(SET_REQS)
+    ttl = rsg.to_req_turtle()
+    assert "reqont:" in ttl
+    g = rdflib.Graph()
+    g.parse(data=ttl, format="turtle")          # raises if malformed
+    assert len(g) > 0
+
+
+def test_to_req_turtle_escapes_special_characters():
+    """Requirement text with quotes must round-trip exactly (regression for the
+    `!r` double-escaping bug — _ttl_literal must be wrapped in double quotes)."""
+    rdflib = pytest.importorskip("rdflib")
+    from rdflib import URIRef
+    from reqgraph.corpus import build_requirement_set_graph
+    text = 'The system shall log "events" and stop.'
+    rsg = build_requirement_set_graph([("R1", text)])
+    g = rdflib.Graph()
+    g.parse(data=rsg.to_req_turtle(), format="turtle")
+    pred = URIRef("http://reqgraph.io/ontology/text")
+    texts = [str(o) for s, p, o in g if p == pred]
+    assert text in texts, texts
+
+
+def test_cli_export_req_turtle_flag(tmp_path):
+    rdflib = pytest.importorskip("rdflib")
+    from reqgraph.__main__ import main
+    csv_in = tmp_path / "in.csv"
+    csv_in.write_text("id,text\nR1,The system shall log events.\n", encoding="utf-8")
+    out = tmp_path / "req.ttl"
+    rc = main(["export", str(csv_in), "--req-turtle", str(out)])
+    assert rc == 0
+    assert out.exists()
+    g = rdflib.Graph()
+    g.parse(str(out), format="turtle")           # raises if malformed
+    assert len(g) > 0
+
+
+def test_gui_export_request_includes_req_turtle():
+    rdflib = pytest.importorskip("rdflib")
+    from reqgraph.gui import GuiState, export_request
+    pasted = "\n".join(t for _, t in SET_REQS)
+    d = export_request(GuiState(), {"format": "lines", "content": pasted})
+    assert "req_turtle" in d
+    g = rdflib.Graph()
+    g.parse(data=d["req_turtle"], format="turtle")
+    assert len(g) > 0
+
+
+def test_gui_export_plain_text_lines():
+    """Pasting plain requirements one-per-line must work (regression: this used
+    to fail because the backend assumed a CSV header)."""
+    from reqgraph.gui import GuiState, export_request
+    pasted = "\n".join(t for _, t in SET_REQS)
+    for fmt in ("lines", "", "text"):                       # all mean plain text
+        d = export_request(GuiState(), {"format": fmt, "content": pasted})
+        assert d["n_requirements"] == 4, fmt
+    # default (no format key at all) also treats paste as plain lines
+    d = export_request(GuiState(), {"content": pasted})
+    assert d["n_requirements"] == 4
+
+
+def test_gui_export_csv_without_text_column_hints_plain_text():
+    """A CSV/plain mix-up should produce a helpful, actionable error."""
+    from reqgraph import ReqGraphError
+    from reqgraph.gui import GuiState, export_request
+    pasted = "\n".join(t for _, t in SET_REQS)
+    with pytest.raises(ReqGraphError) as ei:
+        export_request(GuiState(), {"format": "csv", "content": pasted})
+    assert "Plain text" in str(ei.value)
+
+
+def test_gui_export_threshold_clamped_with_warning():
+    from reqgraph.gui import GuiState, export_request
+    pasted = "\n".join(t for _, t in SET_REQS)
+    d = export_request(GuiState(), {"content": pasted, "threshold": 9})
+    assert d["threshold"] == 1.0
+    assert any("clamped" in w for w in d["warnings"])
+
+
+def test_gui_export_bad_similarity_rejected():
+    from reqgraph import ReqGraphError
+    from reqgraph.gui import GuiState, export_request
+    pasted = "\n".join(t for _, t in SET_REQS)
+    with pytest.raises(ReqGraphError):
+        export_request(GuiState(), {"content": pasted, "similarity": "magic"})
