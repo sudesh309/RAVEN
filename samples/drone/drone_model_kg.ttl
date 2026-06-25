@@ -1,0 +1,721 @@
+# =============================================================================
+# Drone System Knowledge Graph
+# Ontology: sysmlkg: <http://reqgraph.io/sysml/>
+# Generated from drone_model.sysml (SysML v2 structural + behavioral model)
+# =============================================================================
+
+@prefix sysmlkg: <http://reqgraph.io/sysml/> .
+@prefix rdfs:    <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:     <http://www.w3.org/2002/07/owl#> .
+@prefix xsd:     <http://www.w3.org/2001/XMLSchema#> .
+@prefix :        <http://example.org/drone#> .
+
+# -----------------------------------------------------------------------------
+# Ontology declaration
+# -----------------------------------------------------------------------------
+
+<http://example.org/drone>
+    a owl:Ontology ;
+    rdfs:label "Drone System Knowledge Graph" ;
+    rdfs:comment "Structural and behavioral knowledge graph of an autonomous  multi-rotor drone modelled in SysML v2." .
+
+# -----------------------------------------------------------------------------
+# STRUCTURAL LAYER — Part Definitions (Blocks)
+# -----------------------------------------------------------------------------
+
+# Top-level system
+:DroneSystem
+    a sysmlkg:Block ;
+    rdfs:label "DroneSystem" ;
+    rdfs:comment "Top-level autonomous drone system integrating propulsion, power,  avionics, communication, navigation, and payload subsystems." ;
+    sysmlkg:inPackage         :pkg_DroneSystem ;
+    sysmlkg:hasProperty       :prop_maxSpeed ;
+    sysmlkg:hasProperty       :prop_maxAltitude ;
+    sysmlkg:hasProperty       :prop_endurance ;
+    sysmlkg:hasProperty       :prop_payloadCapacity ;
+    sysmlkg:hasProperty       :prop_maxAllUpWeight ;
+    sysmlkg:hasPart           :FlightControlUnit ;
+    sysmlkg:hasPart           :PowerSystem ;
+    sysmlkg:hasPart           :PropulsionSystem ;
+    sysmlkg:hasPart           :CommunicationModule ;
+    sysmlkg:hasPart           :NavigationSystem ;
+    sysmlkg:hasPart           :PayloadSystem ;
+    sysmlkg:satisfies         :req_EnduranceReq ;
+    sysmlkg:satisfies         :req_SafetyAltitudeReq .
+
+# -- Flight Control Subsystem --------------------------------------------------
+
+:FlightControlUnit
+    a sysmlkg:Block ;
+    rdfs:label "FlightControlUnit" ;
+    rdfs:comment "Autopilot: fuses sensor data, runs attitude/position controllers,  executes waypoint missions, and handles failsafe responses." ;
+    sysmlkg:inPackage         :pkg_DroneSystem ;
+    sysmlkg:hasPart           :AttitudeController ;
+    sysmlkg:hasPart           :WaypointNavigator ;
+    sysmlkg:hasPart           :FailsafeManager ;
+    sysmlkg:hasPort           :port_RCInput ;
+    sysmlkg:hasPort           :port_SensorBus ;
+    sysmlkg:hasPort           :port_MotorBus ;
+    sysmlkg:hasPort           :port_MAVLinkOutput ;
+    sysmlkg:satisfies         :req_FailsafeReq .
+
+:AttitudeController
+    a sysmlkg:Block ;
+    rdfs:label "AttitudeController" ;
+    rdfs:comment "Cascaded PID attitude stabiliser with feed-forward.  Inner rate loop bandwidth >= 15 Hz." ;
+    sysmlkg:inPackage   :pkg_DroneSystem ;
+    sysmlkg:hasProperty :prop_rollKp ;
+    sysmlkg:hasProperty :prop_pitchKp ;
+    sysmlkg:hasProperty :prop_yawKp ;
+    sysmlkg:hasProperty :prop_loopRateHz .
+
+:WaypointNavigator
+    a sysmlkg:Block ;
+    rdfs:label "WaypointNavigator" ;
+    rdfs:comment "GPS-guided waypoint mission executor. Cross-track error <= 2 m." ;
+    sysmlkg:inPackage   :pkg_DroneSystem ;
+    sysmlkg:hasProperty :prop_maxWaypoints ;
+    sysmlkg:hasProperty :prop_crossTrackMaxM .
+
+:FailsafeManager
+    a sysmlkg:Block ;
+    rdfs:label "FailsafeManager" ;
+    rdfs:comment "Monitors RC link, battery SoC, and geofence; triggers RTH or auto-land." ;
+    sysmlkg:inPackage   :pkg_DroneSystem ;
+    sysmlkg:hasProperty :prop_linkLossTimeout ;
+    sysmlkg:hasProperty :prop_rthSoCThreshold ;
+    sysmlkg:hasProperty :prop_autoLandSoCThresh ;
+    sysmlkg:hasProperty :prop_maxAltitudeLimitM .
+
+# -- Power Subsystem -----------------------------------------------------------
+
+:PowerSystem
+    a sysmlkg:Block ;
+    rdfs:label "PowerSystem" ;
+    rdfs:comment "Battery pack plus power distribution board.  Supplies 25.2 V bus and regulated 5 V avionics rail." ;
+    sysmlkg:inPackage :pkg_DroneSystem ;
+    sysmlkg:hasPart   :BatteryPack ;
+    sysmlkg:hasPart   :PowerDistributionBoard ;
+    sysmlkg:hasPort   :port_PowerOutput .
+
+:BatteryPack
+    a sysmlkg:Block ;
+    rdfs:label "BatteryPack" ;
+    rdfs:comment "LiPo 6S 5000 mAh 22.2 V. BMS protects against overcharge and  over-discharge. Minimum 200 charge cycles." ;
+    sysmlkg:inPackage   :pkg_DroneSystem ;
+    sysmlkg:hasProperty :prop_nominalVoltageV ;
+    sysmlkg:hasProperty :prop_capacityAh ;
+    sysmlkg:hasProperty :prop_energyWh ;
+    sysmlkg:hasProperty :prop_minCycles ;
+    sysmlkg:hasProperty :prop_stateOfCharge .
+
+:PowerDistributionBoard
+    a sysmlkg:Block ;
+    rdfs:label "PowerDistributionBoard" ;
+    rdfs:comment "Routes 25.2 V to four ESC rails; provides 5 V regulated avionics bus." ;
+    sysmlkg:inPackage   :pkg_DroneSystem ;
+    sysmlkg:hasProperty :prop_avionicsVoltV ;
+    sysmlkg:hasProperty :prop_maxCurrentA_pdb .
+
+# -- Propulsion Subsystem ------------------------------------------------------
+
+:PropulsionSystem
+    a sysmlkg:Block ;
+    rdfs:label "PropulsionSystem" ;
+    rdfs:comment "Quadrotor X-frame: 4 x (brushless motor + propeller + ESC).  Thrust-to-weight ratio >= 2:1 at MTOW." ;
+    sysmlkg:inPackage :pkg_DroneSystem ;
+    sysmlkg:hasPart   :BrushlessMotor ;
+    sysmlkg:hasPart   :Propeller ;
+    sysmlkg:hasPart   :ESC ;
+    sysmlkg:satisfies :req_ThrustMarginReq .
+
+:BrushlessMotor
+    a sysmlkg:Block ;
+    rdfs:label "BrushlessMotor" ;
+    rdfs:comment "KV920 brushless DC motor. Static thrust >= 500 g. Operating temp 0-60 C." ;
+    sysmlkg:inPackage   :pkg_DroneSystem ;
+    sysmlkg:hasProperty :prop_kv ;
+    sysmlkg:hasProperty :prop_maxThrustG ;
+    sysmlkg:hasProperty :prop_maxTempC .
+
+:Propeller
+    a sysmlkg:Block ;
+    rdfs:label "Propeller" ;
+    rdfs:comment "10-inch 4.5-pitch carbon-fibre two-blade propeller." ;
+    sysmlkg:inPackage   :pkg_DroneSystem ;
+    sysmlkg:hasProperty :prop_diameterIn ;
+    sysmlkg:hasProperty :prop_pitchIn .
+
+:ESC
+    a sysmlkg:Block ;
+    rdfs:label "ESC" ;
+    rdfs:comment "40 A DSHOT-compatible electronic speed controller. Response <= 5 ms." ;
+    sysmlkg:inPackage   :pkg_DroneSystem ;
+    sysmlkg:hasProperty :prop_maxCurrentA_esc ;
+    sysmlkg:hasProperty :prop_responseTimeMs .
+
+# -- Communication Subsystem ---------------------------------------------------
+
+:CommunicationModule
+    a sysmlkg:Block ;
+    rdfs:label "CommunicationModule" ;
+    rdfs:comment "FHSS RC uplink (SBUS) and MAVLink 2.0 telemetry downlink.  RC latency <= 20 ms; telemetry range >= 1000 m." ;
+    sysmlkg:inPackage :pkg_DroneSystem ;
+    sysmlkg:hasPart   :RCReceiver ;
+    sysmlkg:hasPart   :TelemetryTransceiver ;
+    sysmlkg:hasPort   :port_TelemetryOutput ;
+    sysmlkg:hasPort   :port_RCOutput ;
+    sysmlkg:satisfies :req_LinkBudgetReq .
+
+:RCReceiver
+    a sysmlkg:Block ;
+    rdfs:label "RCReceiver" ;
+    rdfs:comment "2.4 GHz FHSS RC receiver. SBUS output at 100 Hz. 16 channels." ;
+    sysmlkg:inPackage   :pkg_DroneSystem ;
+    sysmlkg:hasProperty :prop_rcFreqMHz ;
+    sysmlkg:hasProperty :prop_channels ;
+    sysmlkg:hasProperty :prop_rcLatencyMs .
+
+:TelemetryTransceiver
+    a sysmlkg:Block ;
+    rdfs:label "TelemetryTransceiver" ;
+    rdfs:comment "915 MHz MAVLink 2.0 half-duplex transceiver. AES-128 encrypted  command channel. Range >= 1000 m. Data rate 57.6 kbps." ;
+    sysmlkg:inPackage   :pkg_DroneSystem ;
+    sysmlkg:hasProperty :prop_telFreqMHz ;
+    sysmlkg:hasProperty :prop_rangeM ;
+    sysmlkg:hasProperty :prop_dataRateKbps ;
+    sysmlkg:hasProperty :prop_linkMarginDb .
+
+# -- Navigation Subsystem -----------------------------------------------------
+
+:NavigationSystem
+    a sysmlkg:Block ;
+    rdfs:label "NavigationSystem" ;
+    rdfs:comment "EKF-fused GNSS/IMU/baro navigation. Obstacle detection and geofencing." ;
+    sysmlkg:inPackage :pkg_DroneSystem ;
+    sysmlkg:hasPart   :GNSSReceiver ;
+    sysmlkg:hasPart   :ImuSensor ;
+    sysmlkg:hasPart   :Barometer ;
+    sysmlkg:hasPart   :ObstacleDetector ;
+    sysmlkg:hasPort   :port_PositionOutput ;
+    sysmlkg:satisfies :req_PositionAccuracyReq .
+
+:GNSSReceiver
+    a sysmlkg:Block ;
+    rdfs:label "GNSSReceiver" ;
+    rdfs:comment "Dual-band GPS+GLONASS. CEP <= 1.5 m. Cold fix <= 30 s." ;
+    sysmlkg:inPackage   :pkg_DroneSystem ;
+    sysmlkg:hasProperty :prop_cepM ;
+    sysmlkg:hasProperty :prop_coldFixSec ;
+    sysmlkg:hasProperty :prop_gnssUpdateRateHz .
+
+:ImuSensor
+    a sysmlkg:Block ;
+    rdfs:label "ImuSensor" ;
+    rdfs:comment "6-axis MEMS IMU. Sample rate >= 400 Hz." ;
+    sysmlkg:inPackage   :pkg_DroneSystem ;
+    sysmlkg:hasProperty :prop_imuSampleRateHz ;
+    sysmlkg:hasProperty :prop_gyroRangeDps ;
+    sysmlkg:hasProperty :prop_accelRangeG .
+
+:Barometer
+    a sysmlkg:Block ;
+    rdfs:label "Barometer" ;
+    rdfs:comment "Barometric pressure sensor. Altitude accuracy +-0.5 m static." ;
+    sysmlkg:inPackage   :pkg_DroneSystem ;
+    sysmlkg:hasProperty :prop_altAccuracyM ;
+    sysmlkg:hasProperty :prop_baroSampleRateHz .
+
+:ObstacleDetector
+    a sysmlkg:Block ;
+    rdfs:label "ObstacleDetector" ;
+    rdfs:comment "ToF/ultrasonic sensor. Detection range >= 5 m. 20 Hz update rate." ;
+    sysmlkg:inPackage   :pkg_DroneSystem ;
+    sysmlkg:hasProperty :prop_detectionRangeM ;
+    sysmlkg:hasProperty :prop_obsUpdateRateHz .
+
+# -- Payload Subsystem ---------------------------------------------------------
+
+:PayloadSystem
+    a sysmlkg:Block ;
+    rdfs:label "PayloadSystem" ;
+    rdfs:comment "Stabilised camera payload. Accepts up to 500 g. Provides 12 V/2 A." ;
+    sysmlkg:inPackage :pkg_DroneSystem ;
+    sysmlkg:hasPart   :Camera ;
+    sysmlkg:hasPart   :Gimbal ;
+    sysmlkg:hasPort   :port_PayloadPower ;
+    sysmlkg:hasPort   :port_VideoOutput ;
+    sysmlkg:satisfies :req_PayloadInterfaceReq .
+
+:Camera
+    a sysmlkg:Block ;
+    rdfs:label "Camera" ;
+    rdfs:comment "4K / 30 fps CMOS camera. FOV 84 deg horizontal." ;
+    sysmlkg:inPackage   :pkg_DroneSystem ;
+    sysmlkg:hasProperty :prop_resolutionK ;
+    sysmlkg:hasProperty :prop_fps ;
+    sysmlkg:hasProperty :prop_fovDeg .
+
+:Gimbal
+    a sysmlkg:Block ;
+    rdfs:label "Gimbal" ;
+    rdfs:comment "3-axis brushless stabilised gimbal. Accuracy +-0.01 deg." ;
+    sysmlkg:inPackage   :pkg_DroneSystem ;
+    sysmlkg:hasProperty :prop_stabilAccuracyDeg ;
+    sysmlkg:hasProperty :prop_tiltRangeDeg .
+
+# -----------------------------------------------------------------------------
+# Property Nodes (ValueProperties / Attributes)
+# -----------------------------------------------------------------------------
+
+:prop_maxSpeed            a sysmlkg:ValueProperty ; rdfs:label "maxSpeed" ;
+    sysmlkg:value "15.0"^^xsd:double ; sysmlkg:unit "m/s" .
+:prop_maxAltitude         a sysmlkg:ValueProperty ; rdfs:label "maxAltitude" ;
+    sysmlkg:value "120.0"^^xsd:double ; sysmlkg:unit "m AGL" .
+:prop_endurance           a sysmlkg:ValueProperty ; rdfs:label "endurance" ;
+    sysmlkg:value "30.0"^^xsd:double ; sysmlkg:unit "min" .
+:prop_payloadCapacity     a sysmlkg:ValueProperty ; rdfs:label "payloadCapacity" ;
+    sysmlkg:value "0.5"^^xsd:double ; sysmlkg:unit "kg" .
+:prop_maxAllUpWeight      a sysmlkg:ValueProperty ; rdfs:label "maxAllUpWeight" ;
+    sysmlkg:value "2.0"^^xsd:double ; sysmlkg:unit "kg" .
+:prop_rollKp              a sysmlkg:ValueProperty ; rdfs:label "rollKp" ;
+    sysmlkg:value "6.0"^^xsd:double .
+:prop_pitchKp             a sysmlkg:ValueProperty ; rdfs:label "pitchKp" ;
+    sysmlkg:value "6.0"^^xsd:double .
+:prop_yawKp               a sysmlkg:ValueProperty ; rdfs:label "yawKp" ;
+    sysmlkg:value "3.0"^^xsd:double .
+:prop_loopRateHz          a sysmlkg:ValueProperty ; rdfs:label "loopRateHz" ;
+    sysmlkg:value "400.0"^^xsd:double ; sysmlkg:unit "Hz" .
+:prop_maxWaypoints        a sysmlkg:ValueProperty ; rdfs:label "maxWaypoints" ;
+    sysmlkg:value "99.0"^^xsd:double .
+:prop_crossTrackMaxM      a sysmlkg:ValueProperty ; rdfs:label "crossTrackMaxM" ;
+    sysmlkg:value "2.0"^^xsd:double ; sysmlkg:unit "m" .
+:prop_linkLossTimeout     a sysmlkg:ValueProperty ; rdfs:label "linkLossTimeoutSec" ;
+    sysmlkg:value "2.0"^^xsd:double ; sysmlkg:unit "s" .
+:prop_rthSoCThreshold     a sysmlkg:ValueProperty ; rdfs:label "rthSoCThreshold" ;
+    sysmlkg:value "0.20"^^xsd:double .
+:prop_autoLandSoCThresh   a sysmlkg:ValueProperty ; rdfs:label "autoLandSoCThresh" ;
+    sysmlkg:value "0.05"^^xsd:double .
+:prop_maxAltitudeLimitM   a sysmlkg:ValueProperty ; rdfs:label "maxAltitudeLimitM" ;
+    sysmlkg:value "120.0"^^xsd:double ; sysmlkg:unit "m" .
+:prop_nominalVoltageV     a sysmlkg:ValueProperty ; rdfs:label "nominalVoltageV" ;
+    sysmlkg:value "22.2"^^xsd:double ; sysmlkg:unit "V" .
+:prop_capacityAh          a sysmlkg:ValueProperty ; rdfs:label "capacityAh" ;
+    sysmlkg:value "5.0"^^xsd:double ; sysmlkg:unit "Ah" .
+:prop_energyWh            a sysmlkg:ValueProperty ; rdfs:label "energyWh" ;
+    sysmlkg:value "22.0"^^xsd:double ; sysmlkg:unit "Wh" .
+:prop_minCycles           a sysmlkg:ValueProperty ; rdfs:label "minCycles" ;
+    sysmlkg:value "200.0"^^xsd:double .
+:prop_stateOfCharge       a sysmlkg:ValueProperty ; rdfs:label "stateOfCharge" ;
+    sysmlkg:value "1.0"^^xsd:double .
+:prop_avionicsVoltV       a sysmlkg:ValueProperty ; rdfs:label "avionicsVoltV" ;
+    sysmlkg:value "5.0"^^xsd:double ; sysmlkg:unit "V" .
+:prop_maxCurrentA_pdb     a sysmlkg:ValueProperty ; rdfs:label "maxCurrentA" ;
+    sysmlkg:value "80.0"^^xsd:double ; sysmlkg:unit "A" .
+:prop_kv                  a sysmlkg:ValueProperty ; rdfs:label "kv" ;
+    sysmlkg:value "920.0"^^xsd:double ; sysmlkg:unit "RPM/V" .
+:prop_maxThrustG          a sysmlkg:ValueProperty ; rdfs:label "maxThrustG" ;
+    sysmlkg:value "714.0"^^xsd:double ; sysmlkg:unit "g" .
+:prop_maxTempC            a sysmlkg:ValueProperty ; rdfs:label "maxTempC" ;
+    sysmlkg:value "60.0"^^xsd:double ; sysmlkg:unit "C" .
+:prop_diameterIn          a sysmlkg:ValueProperty ; rdfs:label "diameterIn" ;
+    sysmlkg:value "10.0"^^xsd:double ; sysmlkg:unit "in" .
+:prop_pitchIn             a sysmlkg:ValueProperty ; rdfs:label "pitchIn" ;
+    sysmlkg:value "4.5"^^xsd:double ; sysmlkg:unit "in" .
+:prop_maxCurrentA_esc     a sysmlkg:ValueProperty ; rdfs:label "maxCurrentA" ;
+    sysmlkg:value "40.0"^^xsd:double ; sysmlkg:unit "A" .
+:prop_responseTimeMs      a sysmlkg:ValueProperty ; rdfs:label "responseTimeMs" ;
+    sysmlkg:value "5.0"^^xsd:double ; sysmlkg:unit "ms" .
+:prop_rcFreqMHz           a sysmlkg:ValueProperty ; rdfs:label "frequencyMHz" ;
+    sysmlkg:value "2400.0"^^xsd:double ; sysmlkg:unit "MHz" .
+:prop_channels            a sysmlkg:ValueProperty ; rdfs:label "channels" ;
+    sysmlkg:value "16.0"^^xsd:double .
+:prop_rcLatencyMs         a sysmlkg:ValueProperty ; rdfs:label "latencyMs" ;
+    sysmlkg:value "20.0"^^xsd:double ; sysmlkg:unit "ms" .
+:prop_telFreqMHz          a sysmlkg:ValueProperty ; rdfs:label "frequencyMHz" ;
+    sysmlkg:value "915.0"^^xsd:double ; sysmlkg:unit "MHz" .
+:prop_rangeM              a sysmlkg:ValueProperty ; rdfs:label "rangeM" ;
+    sysmlkg:value "1000.0"^^xsd:double ; sysmlkg:unit "m" .
+:prop_dataRateKbps        a sysmlkg:ValueProperty ; rdfs:label "dataRateKbps" ;
+    sysmlkg:value "57.6"^^xsd:double ; sysmlkg:unit "kbps" .
+:prop_linkMarginDb        a sysmlkg:ValueProperty ; rdfs:label "linkMarginDb" ;
+    sysmlkg:value "6.0"^^xsd:double ; sysmlkg:unit "dB" .
+:prop_cepM                a sysmlkg:ValueProperty ; rdfs:label "cepM" ;
+    sysmlkg:value "1.5"^^xsd:double ; sysmlkg:unit "m" .
+:prop_coldFixSec          a sysmlkg:ValueProperty ; rdfs:label "coldFixSec" ;
+    sysmlkg:value "30.0"^^xsd:double ; sysmlkg:unit "s" .
+:prop_gnssUpdateRateHz    a sysmlkg:ValueProperty ; rdfs:label "updateRateHz" ;
+    sysmlkg:value "10.0"^^xsd:double ; sysmlkg:unit "Hz" .
+:prop_imuSampleRateHz     a sysmlkg:ValueProperty ; rdfs:label "sampleRateHz" ;
+    sysmlkg:value "1000.0"^^xsd:double ; sysmlkg:unit "Hz" .
+:prop_gyroRangeDps        a sysmlkg:ValueProperty ; rdfs:label "gyroRangeDps" ;
+    sysmlkg:value "2000.0"^^xsd:double ; sysmlkg:unit "dps" .
+:prop_accelRangeG         a sysmlkg:ValueProperty ; rdfs:label "accelRangeG" ;
+    sysmlkg:value "16.0"^^xsd:double ; sysmlkg:unit "g" .
+:prop_altAccuracyM        a sysmlkg:ValueProperty ; rdfs:label "altAccuracyM" ;
+    sysmlkg:value "0.5"^^xsd:double ; sysmlkg:unit "m" .
+:prop_baroSampleRateHz    a sysmlkg:ValueProperty ; rdfs:label "sampleRateHz" ;
+    sysmlkg:value "50.0"^^xsd:double ; sysmlkg:unit "Hz" .
+:prop_detectionRangeM     a sysmlkg:ValueProperty ; rdfs:label "detectionRangeM" ;
+    sysmlkg:value "5.0"^^xsd:double ; sysmlkg:unit "m" .
+:prop_obsUpdateRateHz     a sysmlkg:ValueProperty ; rdfs:label "updateRateHz" ;
+    sysmlkg:value "20.0"^^xsd:double ; sysmlkg:unit "Hz" .
+:prop_resolutionK         a sysmlkg:ValueProperty ; rdfs:label "resolutionK" ;
+    sysmlkg:value "4.0"^^xsd:double ; sysmlkg:unit "K" .
+:prop_fps                 a sysmlkg:ValueProperty ; rdfs:label "fps" ;
+    sysmlkg:value "30.0"^^xsd:double ; sysmlkg:unit "fps" .
+:prop_fovDeg              a sysmlkg:ValueProperty ; rdfs:label "fovDeg" ;
+    sysmlkg:value "84.0"^^xsd:double ; sysmlkg:unit "deg" .
+:prop_stabilAccuracyDeg   a sysmlkg:ValueProperty ; rdfs:label "stabilAccuracyDeg" ;
+    sysmlkg:value "0.01"^^xsd:double ; sysmlkg:unit "deg" .
+:prop_tiltRangeDeg        a sysmlkg:ValueProperty ; rdfs:label "tiltRangeDeg" ;
+    sysmlkg:value "90.0"^^xsd:double ; sysmlkg:unit "deg" .
+
+# -----------------------------------------------------------------------------
+# Port Nodes
+# -----------------------------------------------------------------------------
+
+:port_RCInput         a sysmlkg:Port ; rdfs:label "rcInput" ;
+    rdfs:comment "SBUS RC uplink input to FCU." .
+:port_SensorBus       a sysmlkg:Port ; rdfs:label "sensorBus" ;
+    rdfs:comment "Internal sensor data bus IMU/baro/GNSS to FCU." .
+:port_MotorBus        a sysmlkg:Port ; rdfs:label "motorBus" ;
+    rdfs:comment "DSHOT motor command bus from FCU to ESCs." .
+:port_MAVLinkOutput   a sysmlkg:Port ; rdfs:label "mavlinkOut" ;
+    rdfs:comment "MAVLink 2.0 stream from FCU to telemetry transceiver." .
+:port_PowerOutput     a sysmlkg:Port ; rdfs:label "powerOut" ;
+    rdfs:comment "25.2 V battery bus output to ESCs and avionics." .
+:port_TelemetryOutput a sysmlkg:Port ; rdfs:label "telemetryOut" ;
+    rdfs:comment "RF telemetry downlink to ground station." .
+:port_RCOutput        a sysmlkg:Port ; rdfs:label "rcOut" ;
+    rdfs:comment "Decoded RC commands to FCU." .
+:port_PositionOutput  a sysmlkg:Port ; rdfs:label "positionOut" ;
+    rdfs:comment "EKF position/velocity/attitude solution." .
+:port_PayloadPower    a sysmlkg:Port ; rdfs:label "payloadPower" ;
+    rdfs:comment "Regulated 12 V / 2 A payload power feed." .
+:port_VideoOutput     a sysmlkg:Port ; rdfs:label "videoOut" ;
+    rdfs:comment "Digital video stream to ground station." .
+
+# -----------------------------------------------------------------------------
+# BEHAVIORAL LAYER — Action Definitions
+# -----------------------------------------------------------------------------
+
+:act_PerformMission
+    a sysmlkg:ActionDefinition ;
+    rdfs:label "PerformMission" ;
+    rdfs:comment "Top-level mission action: preflight -> takeoff -> [waypoint loop]  -> RTH -> land." ;
+    sysmlkg:inPackage     :pkg_DroneSystem ;
+    sysmlkg:hasSubAction  :act_Preflight ;
+    sysmlkg:hasSubAction  :act_TakeOff ;
+    sysmlkg:hasSubAction  :act_HoverInPlace ;
+    sysmlkg:hasSubAction  :act_NavigateToWaypoint ;
+    sysmlkg:hasSubAction  :act_ExecuteMissionTask ;
+    sysmlkg:hasSubAction  :act_ReturnToHome ;
+    sysmlkg:hasSubAction  :act_Land .
+
+:act_Preflight
+    a sysmlkg:ActionDefinition ;
+    rdfs:label "Preflight" ;
+    rdfs:comment "Pre-arming checks: sensor self-test, GNSS fix, ESC calibration,  battery SoC >= 30%, geofence load." ;
+    sysmlkg:inPackage    :pkg_DroneSystem ;
+    sysmlkg:triggersState :state_PreFlight .
+
+:act_ArmMotors
+    a sysmlkg:ActionDefinition ;
+    rdfs:label "ArmMotors" ;
+    rdfs:comment "Arms ESC/motor subsystem after preflight pass and throttle-low check." ;
+    sysmlkg:inPackage    :pkg_DroneSystem ;
+    sysmlkg:triggersState :state_MotorArmed .
+
+:act_TakeOff
+    a sysmlkg:ActionDefinition ;
+    rdfs:label "TakeOff" ;
+    rdfs:comment "Autonomous ascent to target hover altitude. Requires GPS fix,  SoC >= 30%, motors armed." ;
+    sysmlkg:inPackage    :pkg_DroneSystem ;
+    sysmlkg:triggersState :state_TakingOff ;
+    sysmlkg:followedBy    :act_HoverInPlace .
+
+:act_HoverInPlace
+    a sysmlkg:ActionDefinition ;
+    rdfs:label "HoverInPlace" ;
+    rdfs:comment "GPS position-hold at current altitude. Max drift 1.5 m CEP." ;
+    sysmlkg:inPackage    :pkg_DroneSystem ;
+    sysmlkg:triggersState :state_Hovering ;
+    sysmlkg:followedBy    :act_NavigateToWaypoint .
+
+:act_NavigateToWaypoint
+    a sysmlkg:ActionDefinition ;
+    rdfs:label "NavigateToWaypoint" ;
+    rdfs:comment "Flies to target GPS waypoint at specified altitude and speed.  Executes obstacle avoidance if obstacle map is non-empty." ;
+    sysmlkg:inPackage    :pkg_DroneSystem ;
+    sysmlkg:triggersState :state_Navigating ;
+    sysmlkg:followedBy    :act_ExecuteMissionTask .
+
+:act_ExecuteMissionTask
+    a sysmlkg:ActionDefinition ;
+    rdfs:label "ExecuteMissionTask" ;
+    rdfs:comment "Performs waypoint task: capture image, loiter, or trigger payload." ;
+    sysmlkg:inPackage   :pkg_DroneSystem ;
+    sysmlkg:followedBy  :act_NavigateToWaypoint .
+
+:act_ReturnToHome
+    a sysmlkg:ActionDefinition ;
+    rdfs:label "ReturnToHome" ;
+    rdfs:comment "Climbs to RTH altitude (30 m), flies to home position, descends." ;
+    sysmlkg:inPackage    :pkg_DroneSystem ;
+    sysmlkg:triggersState :state_ReturnHome ;
+    sysmlkg:followedBy    :act_Land .
+
+:act_Land
+    a sysmlkg:ActionDefinition ;
+    rdfs:label "Land" ;
+    rdfs:comment "Controlled autonomous descent. Detects ground contact via  barometer/IMU; cuts motors on touch-down." ;
+    sysmlkg:inPackage    :pkg_DroneSystem ;
+    sysmlkg:triggersState :state_Landing ;
+    sysmlkg:followedBy    :act_DisarmMotors .
+
+:act_EmergencyLanding
+    a sysmlkg:ActionDefinition ;
+    rdfs:label "EmergencyLanding" ;
+    rdfs:comment "Immediate controlled descent triggered by critical battery (SoC < 5%)  or hardware fault. Overrides current mission phase." ;
+    sysmlkg:inPackage    :pkg_DroneSystem ;
+    sysmlkg:triggersState :state_Emergency .
+
+:act_DisarmMotors
+    a sysmlkg:ActionDefinition ;
+    rdfs:label "DisarmMotors" ;
+    rdfs:comment "Disarms ESC/motor subsystem after landing or on pilot command." ;
+    sysmlkg:inPackage    :pkg_DroneSystem ;
+    sysmlkg:triggersState :state_Grounded .
+
+:act_RunAttitudeController
+    a sysmlkg:ActionDefinition ;
+    rdfs:label "RunAttitudeController" ;
+    rdfs:comment "Cascaded PID attitude loop at 400 Hz. Computes per-motor thrust." ;
+    sysmlkg:inPackage   :pkg_DroneSystem ;
+    sysmlkg:performedBy :AttitudeController .
+
+:act_RunPositionController
+    a sysmlkg:ActionDefinition ;
+    rdfs:label "RunPositionController" ;
+    rdfs:comment "Computes attitude setpoint from position/velocity error at 50 Hz." ;
+    sysmlkg:inPackage   :pkg_DroneSystem ;
+    sysmlkg:performedBy :WaypointNavigator ;
+    sysmlkg:followedBy  :act_RunAttitudeController .
+
+:act_BroadcastTelemetry
+    a sysmlkg:ActionDefinition ;
+    rdfs:label "BroadcastTelemetry" ;
+    rdfs:comment "Transmits 10 Hz MAVLink 2.0 telemetry: position, attitude,  battery, mode, heartbeat." ;
+    sysmlkg:inPackage   :pkg_DroneSystem ;
+    sysmlkg:performedBy :TelemetryTransceiver .
+
+:act_ProcessRCInput
+    a sysmlkg:ActionDefinition ;
+    rdfs:label "ProcessRCInput" ;
+    rdfs:comment "Decodes SBUS frame; maps to attitude or velocity setpoints." ;
+    sysmlkg:inPackage   :pkg_DroneSystem ;
+    sysmlkg:performedBy :RCReceiver ;
+    sysmlkg:followedBy  :act_RunAttitudeController .
+
+:act_MonitorBattery
+    a sysmlkg:ActionDefinition ;
+    rdfs:label "MonitorBattery" ;
+    rdfs:comment "Samples cell voltages at 1 Hz; runs SoC estimation;  publishes failsafe events on threshold crossings." ;
+    sysmlkg:inPackage   :pkg_DroneSystem ;
+    sysmlkg:performedBy :BatteryPack .
+
+:act_DetectObstacles
+    a sysmlkg:ActionDefinition ;
+    rdfs:label "DetectObstacles" ;
+    rdfs:comment "Processes ToF data at 20 Hz; publishes obstacle map." ;
+    sysmlkg:inPackage   :pkg_DroneSystem ;
+    sysmlkg:performedBy :ObstacleDetector ;
+    sysmlkg:followedBy  :act_NavigateToWaypoint .
+
+:act_EstimateState
+    a sysmlkg:ActionDefinition ;
+    rdfs:label "EstimateState" ;
+    rdfs:comment "EKF fusing IMU (400 Hz), GNSS (10 Hz), barometer (50 Hz)." ;
+    sysmlkg:inPackage   :pkg_DroneSystem ;
+    sysmlkg:performedBy :NavigationSystem ;
+    sysmlkg:followedBy  :act_RunPositionController .
+
+:act_EnforceGeofence
+    a sysmlkg:ActionDefinition ;
+    rdfs:label "EnforceGeofence" ;
+    rdfs:comment "Checks position against geofence polygons; commands RTH or hover  if boundary approached." ;
+    sysmlkg:inPackage   :pkg_DroneSystem ;
+    sysmlkg:performedBy :FailsafeManager .
+
+# -----------------------------------------------------------------------------
+# BEHAVIORAL LAYER — State Definitions
+# -----------------------------------------------------------------------------
+
+:state_DroneOperationalState
+    a sysmlkg:StateDefinition ;
+    rdfs:label "DroneOperationalState" ;
+    rdfs:comment "Top-level operational state machine." ;
+    sysmlkg:inPackage :pkg_DroneSystem ;
+    sysmlkg:hasState  :state_Grounded ;
+    sysmlkg:hasState  :state_PreFlight ;
+    sysmlkg:hasState  :state_TakingOff ;
+    sysmlkg:hasState  :state_Hovering ;
+    sysmlkg:hasState  :state_Navigating ;
+    sysmlkg:hasState  :state_ReturnHome ;
+    sysmlkg:hasState  :state_Landing ;
+    sysmlkg:hasState  :state_Emergency .
+
+:state_Grounded
+    a sysmlkg:State ;
+    rdfs:label "Grounded" ;
+    rdfs:comment "On ground, motors disarmed. Initial post-power-on state." ;
+    sysmlkg:transitionsTo :state_PreFlight ;
+    sysmlkg:transitionGuard "arm_command_received AND preflight_checks_passed" .
+
+:state_PreFlight
+    a sysmlkg:State ;
+    rdfs:label "PreFlight" ;
+    rdfs:comment "Running sensor self-test, GNSS fix, ESC check, SoC >= 30%." ;
+    sysmlkg:transitionsTo :state_TakingOff ;
+    sysmlkg:transitionGuard "preflight_ok AND takeoff_command" .
+
+:state_TakingOff
+    a sysmlkg:State ;
+    rdfs:label "TakingOff" ;
+    rdfs:comment "Ascending to target hover altitude." ;
+    sysmlkg:transitionsTo :state_Hovering ;
+    sysmlkg:transitionGuard "altitude_reached WITHIN 0.5m" .
+
+:state_Hovering
+    a sysmlkg:State ;
+    rdfs:label "Hovering" ;
+    rdfs:comment "GPS position-hold at altitude. Stable inter-waypoint state." ;
+    sysmlkg:transitionsTo :state_Navigating ;
+    sysmlkg:transitionGuard "next_waypoint_command" .
+
+:state_Navigating
+    a sysmlkg:State ;
+    rdfs:label "Navigating" ;
+    rdfs:comment "Flying towards target waypoint." ;
+    sysmlkg:transitionsTo :state_Hovering ;
+    sysmlkg:transitionGuard "waypoint_arrived" .
+
+:state_ReturnHome
+    a sysmlkg:State ;
+    rdfs:label "ReturnHome" ;
+    rdfs:comment "RTH: climb to RTH altitude, fly to home, prepare to land." ;
+    sysmlkg:transitionsTo :state_Landing ;
+    sysmlkg:transitionGuard "home_position_reached" .
+
+:state_Landing
+    a sysmlkg:State ;
+    rdfs:label "Landing" ;
+    rdfs:comment "Controlled descent. Transitions to Grounded on touch-down." ;
+    sysmlkg:transitionsTo :state_Grounded ;
+    sysmlkg:transitionGuard "touchdown_detected" .
+
+:state_Emergency
+    a sysmlkg:State ;
+    rdfs:label "Emergency" ;
+    rdfs:comment "Critical fault: triggers EmergencyLanding immediately." ;
+    sysmlkg:transitionsTo :state_Grounded ;
+    sysmlkg:transitionGuard "emergency_landing_complete" .
+
+:state_MotorState
+    a sysmlkg:StateDefinition ;
+    rdfs:label "MotorState" ;
+    sysmlkg:inPackage :pkg_DroneSystem ;
+    sysmlkg:hasState  :state_MotorDisarmed ;
+    sysmlkg:hasState  :state_MotorArmed ;
+    sysmlkg:hasState  :state_MotorRunning ;
+    sysmlkg:hasState  :state_MotorFaultStop .
+
+:state_MotorDisarmed  a sysmlkg:State ; rdfs:label "Disarmed" ;
+    rdfs:comment "Motors safe; no thrust." .
+:state_MotorArmed     a sysmlkg:State ; rdfs:label "Armed" ;
+    rdfs:comment "Throttle commands accepted." .
+:state_MotorRunning   a sysmlkg:State ; rdfs:label "Running" ;
+    rdfs:comment "Motors spinning; drone in flight." .
+:state_MotorFaultStop a sysmlkg:State ; rdfs:label "FaultStop" ;
+    rdfs:comment "Motor fault detected; motor stopped for safety." .
+
+:state_BatteryState
+    a sysmlkg:StateDefinition ;
+    rdfs:label "BatteryState" ;
+    sysmlkg:inPackage :pkg_DroneSystem ;
+    sysmlkg:hasState  :state_BattNormal ;
+    sysmlkg:hasState  :state_BattLow ;
+    sysmlkg:hasState  :state_BattCritical ;
+    sysmlkg:hasState  :state_BattEmergency .
+
+:state_BattNormal    a sysmlkg:State ; rdfs:label "Normal" ;
+    rdfs:comment "SoC > 20%. Normal operation." .
+:state_BattLow       a sysmlkg:State ; rdfs:label "LowBattery" ;
+    rdfs:comment "SoC 15-20%. RTH warning." .
+:state_BattCritical  a sysmlkg:State ; rdfs:label "Critical" ;
+    rdfs:comment "SoC 5-15%. RTH commanded." .
+:state_BattEmergency a sysmlkg:State ; rdfs:label "Emergency" ;
+    rdfs:comment "SoC < 5%. Auto-land commanded." .
+
+# -----------------------------------------------------------------------------
+# EMBEDDED REQUIREMENTS
+# -----------------------------------------------------------------------------
+
+:req_SafetyAltitudeReq
+    a sysmlkg:Requirement ;
+    rdfs:label "SafetyAltitudeReq" ;
+    sysmlkg:requirementId   "DRONE-SYS-002" ;
+    sysmlkg:requirementText "The drone system shall not exceed 120 m altitude above  ground level under autonomous control in standard mode." ;
+    sysmlkg:inPackage :pkg_DroneSystem .
+
+:req_EnduranceReq
+    a sysmlkg:Requirement ;
+    rdfs:label "EnduranceReq" ;
+    sysmlkg:requirementId   "DRONE-SYS-004" ;
+    sysmlkg:requirementText "The drone system shall achieve a minimum of 30 minutes  of continuous hover flight at maximum rated payload." ;
+    sysmlkg:inPackage :pkg_DroneSystem .
+
+:req_LinkBudgetReq
+    a sysmlkg:Requirement ;
+    rdfs:label "LinkBudgetReq" ;
+    sysmlkg:requirementId   "DRONE-COM-001" ;
+    sysmlkg:requirementText "The communication system shall maintain a minimum link  budget margin of 6 dB at 1000 m slant range." ;
+    sysmlkg:inPackage :pkg_DroneSystem .
+
+:req_PositionAccuracyReq
+    a sysmlkg:Requirement ;
+    rdfs:label "PositionAccuracyReq" ;
+    sysmlkg:requirementId   "DRONE-NAV-001" ;
+    sysmlkg:requirementText "The navigation system shall provide position estimates  with CEP <= 1.5 m under open-sky dual-band GNSS." ;
+    sysmlkg:inPackage :pkg_DroneSystem .
+
+:req_FailsafeReq
+    a sysmlkg:Requirement ;
+    rdfs:label "FailsafeReq" ;
+    sysmlkg:requirementId   "DRONE-FSF-001" ;
+    sysmlkg:requirementText "The FCU shall initiate return-to-home within 2 seconds  of detecting a continuous RC link loss." ;
+    sysmlkg:inPackage :pkg_DroneSystem .
+
+:req_ThrustMarginReq
+    a sysmlkg:Requirement ;
+    rdfs:label "ThrustMarginReq" ;
+    sysmlkg:requirementId   "DRONE-SYS-001" ;
+    sysmlkg:requirementText "The propulsion system shall deliver a thrust-to-weight  ratio of at least 2.0 at maximum all-up weight of 2.0 kg." ;
+    sysmlkg:inPackage :pkg_DroneSystem .
+
+:req_PayloadInterfaceReq
+    a sysmlkg:Requirement ;
+    rdfs:label "PayloadInterfaceReq" ;
+    sysmlkg:requirementId   "DRONE-PLD-001" ;
+    sysmlkg:requirementText "The payload interface shall accept payloads up to 500 g  and supply 12 V / 2 A regulated power during flight." ;
+    sysmlkg:inPackage :pkg_DroneSystem .
+
+# -----------------------------------------------------------------------------
+# Package node
+# -----------------------------------------------------------------------------
+
+:pkg_DroneSystem
+    a sysmlkg:Package ;
+    rdfs:label "DroneSystem" ;
+    rdfs:comment "Top-level SysML v2 package containing the complete drone model." .
