@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>reqgraph studio</title>
+<title>RAVEN — Requirement Analysis and Visualisation Engine</title>
 <style>
   :root{
     --bg:#f7f6f3; --card:#ffffff; --border:#e4e2da; --text:#2c2c2a;
@@ -151,15 +151,36 @@
   .card h2{display:flex;align-items:center}
   .lead{font-size:13px;color:var(--muted);margin:0 0 12px;line-height:1.55}
   .lead b{color:var(--text);font-weight:600}
-  /* top-of-page workflow map */
-  #workflow{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:4px}
-  #workflow .wf{display:flex;align-items:center;gap:7px;font-size:12.5px;
-    color:var(--muted);background:var(--card);border:1px solid var(--border);
-    border-radius:99px;padding:5px 13px 5px 6px}
-  #workflow .wf .n{display:inline-flex;align-items:center;justify-content:center;
-    width:19px;height:19px;border-radius:50%;background:var(--accent-soft);
-    color:var(--accent);font-size:11px;font-weight:700}
-  #workflow .wf b{color:var(--text);font-weight:600}
+  /* RAVEN brand mark in the header */
+  header h1 .brand{font-weight:800;letter-spacing:.06em;color:var(--accent);
+    background:var(--accent-soft);border:1px solid #d9d6f5;
+    padding:2px 12px;border-radius:9px}
+  header h1 .brand .x{color:var(--accent);text-decoration:underline;
+    text-decoration-thickness:2px;text-underline-offset:3px}
+  /* top-of-page 4-step process overview */
+  #process h2{margin-bottom:4px}
+  #process .pintro{font-size:12.5px;color:var(--muted);margin:0 0 14px;line-height:1.5}
+  .steps4{list-style:none;display:grid;grid-template-columns:repeat(4,1fr);
+    gap:12px;margin:0;padding:0}
+  @media(max-width:820px){.steps4{grid-template-columns:1fr 1fr}}
+  @media(max-width:460px){.steps4{grid-template-columns:1fr}}
+  .steps4 li{position:relative;background:var(--bg);border:1px solid var(--border);
+    border-radius:10px;padding:12px 14px;display:flex;gap:11px;align-items:flex-start}
+  .steps4 li .sn{flex:none;width:27px;height:27px;border-radius:50%;
+    background:var(--accent);color:#fff;font-weight:700;font-size:13px;
+    display:inline-flex;align-items:center;justify-content:center}
+  .steps4 li .t{font-size:13.5px;font-weight:650;margin-bottom:3px;line-height:1.3}
+  .steps4 li p{margin:0;font-size:12px;color:var(--muted);line-height:1.45}
+  .steps4 li .tag{display:inline-block;font-size:10px;font-weight:600;
+    letter-spacing:.03em;padding:1px 8px;border-radius:99px;margin-top:8px}
+  .steps4 li .tag.now{background:var(--ok-soft);color:var(--ok)}
+  .steps4 li .tag.you{background:var(--accent-soft);color:var(--accent)}
+  /* arrow connector between steps on wide layouts */
+  @media(min-width:821px){
+    .steps4 li:not(:last-child)::after{content:"";position:absolute;
+      right:-9px;top:26px;width:9px;height:9px;border-top:2px solid #cfcdc4;
+      border-right:2px solid #cfcdc4;transform:rotate(45deg);background:transparent}
+  }
   /* SysML v1 error / warn boxes (style only — visibility stays on [hidden]) */
   #v1-error{background:var(--bad-soft);color:var(--bad);border:1px solid #f0c0c0;
     border-radius:8px;padding:9px 13px;font-size:14px;margin-top:10px}
@@ -180,18 +201,39 @@
 </head>
 <body>
 <header>
-  <h1>reqgraph studio</h1>
-  <span class="sub">turn requirements &amp; models into semantic graphs</span>
+  <h1><span class="brand"><span class="x">RAVEN</span></span></h1>
+  <span class="sub">Requirement Analysis and Visualisation Engine</span>
   <span class="ver" id="ver"></span>
 </header>
 <main>
-  <nav id="workflow" aria-label="Tools on this page">
-    <span class="wf"><span class="n">1</span><b>Parse</b> one requirement</span>
-    <span class="wf"><span class="n">2</span><b>Connect</b> a set (quick)</span>
-    <span class="wf"><span class="n">3</span><b>Import &amp; analyze</b> a set + quality</span>
-    <span class="wf"><span class="n">4</span><b>Compare</b> SysML v2 model</span>
-    <span class="wf"><span class="n">5</span><b>Compare</b> SysML v1 model</span>
-  </nav>
+  <section class="card" id="process">
+    <h2>How RAVEN works — 4 steps</h2>
+    <p class="pintro">RAVEN takes a requirement set from raw document to a
+      validated, machine-readable specification. The tools further down the page
+      carry out steps&nbsp;1, 2 and 4; step&nbsp;3 is your review.</p>
+    <ol class="steps4">
+      <li><span class="sn">1</span>
+        <div><div class="t">Upload requirement set / document</div>
+          <p>Import a CSV, Excel, JSON or ReqIF file — or paste plain text. Extra
+            columns (rationale, applicability…) are detected automatically.</p>
+          <span class="tag now">Import &amp; analyze</span></div></li>
+      <li><span class="sn">2</span>
+        <div><div class="t">Run this checker</div>
+          <p>Parse every requirement into IREB roles, score its quality, find
+            related requirements, and compare against your SysML model.</p>
+          <span class="tag now">Automated</span></div></li>
+      <li><span class="sn">3</span>
+        <div><div class="t">Validate suggestions — human in the loop</div>
+          <p>Review the flagged smells, coverage gaps and match suggestions in the
+            results, and accept or adjust each one.</p>
+          <span class="tag you">You decide</span></div></li>
+      <li><span class="sn">4</span>
+        <div><div class="t">Generate the final valid requirement</div>
+          <p>Export the validated set as CSV, JSON, GraphML or Turtle — ready for
+            a triplestore, tool import, or sign-off.</p>
+          <span class="tag now">Download</span></div></li>
+    </ol>
+  </section>
   <section class="card">
     <h2><span class="step">1</span>Parse a requirement</h2>
     <p class="lead">Type or load one requirement. It is split into IREB roles

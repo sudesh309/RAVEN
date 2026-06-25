@@ -573,7 +573,8 @@ def test_gui_server_smoke():
     base = f"http://127.0.0.1:{server.server_address[1]}"
     try:
         page = urllib.request.urlopen(f"{base}/", timeout=10).read().decode()
-        assert "reqgraph studio" in page
+        assert "RAVEN" in page
+        assert "Requirement Analysis and Visualisation Engine" in page
         info = _json.load(urllib.request.urlopen(f"{base}/api/info", timeout=10))
         assert info["backends"]["rules"] is True
         # config explainer content is served for the UI
