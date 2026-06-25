@@ -356,6 +356,35 @@ def test_to_turtle_round_trip():
         assert name in rt_names, f"{name} lost in Turtle round-trip"
 
 
+def test_to_turtle_is_valid_rdflib_turtle():
+    """to_turtle() output must parse cleanly under rdflib (well-formed Turtle)."""
+    from reqgraph.sysml_v1_parser import parse_sysml_v1
+    m = parse_sysml_v1(AUTOMOTIVE_XMI)
+    g = rdflib.Graph()
+    g.parse(data=m.to_turtle(), format="turtle")  # raises if malformed
+    assert len(g) > 0
+
+
+def test_to_turtle_escapes_special_characters_exactly():
+    """A doc with a double-quote + newline must round-trip with the EXACT value.
+
+    Regression for the `!r` double-escaping bug: _ttl_literal() returns the
+    escaped *content* and must be wrapped in double quotes, not passed through
+    Python repr (which double-escapes and switches quote style).
+    """
+    from rdflib import RDFS
+    from reqgraph.sysml_v1_parser import parse_sysml_v1
+    xmi = ('<uml:Model xmlns:uml="http://x" '
+           'xmlns:xmi="http://www.omg.org/spec/XMI/20131001">'
+           '<packagedElement xmi:type="uml:Class" xmi:id="_b" name="Brake">'
+           '<ownedComment body=\'say "hi"&#10;line2\'/></packagedElement></uml:Model>')
+    m = parse_sysml_v1(xmi)
+    g = rdflib.Graph()
+    g.parse(data=m.to_turtle(), format="turtle")
+    comments = [str(o) for s, p, o in g if p == RDFS.comment]
+    assert comments and comments[0] == 'say "hi"\nline2', comments
+
+
 # ---------------------------------------------------------------------------
 # Context-building tests
 # ---------------------------------------------------------------------------

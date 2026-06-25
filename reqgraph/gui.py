@@ -20,7 +20,8 @@ POST /api/connections  {texts: [...], template?, backend?, similarity?, threshol
 POST /api/export      {format, content, encoding?, template?, backend?,
                        similarity?, threshold?, roles?} ->
                       {requirements, connections, n_requirements, n_connections,
-                       mermaid, dot, graphml, turtle, cypher, csv_data, error?}
+                       mermaid, dot, graphml, turtle, req_turtle, cypher,
+                       csv_data, error?}
                       -- import a file (CSV/Excel/JSON/ReqIF), run quality analysis
                       + cross-requirement connection detection, return all outputs.
                       ``content`` is the raw file text (UTF-8) or base64 for binary
@@ -445,6 +446,7 @@ def export_request(state: GuiState, payload: dict) -> dict:
         "dot": rsg.to_dot(),
         "graphml": rsg.to_element_graphml(),
         "turtle": rsg.to_turtle(),
+        "req_turtle": rsg.to_req_turtle(),
         "cypher": rsg.to_cypher(),
         "csv_data": df.to_csv(index=False),
         "template": template.name,
@@ -591,9 +593,12 @@ def compare_v1_request(state: GuiState, payload: dict) -> dict:
 
     warnings: list = []
 
-    # Parse the SysML v1 model (auto-detect or use model_format hint)
+    # Parse the SysML v1 model (honor the format hint from the XMI/Turtle tab;
+    # falls back to content auto-detection when the hint is absent/invalid)
+    model_fmt = (payload.get("model_format") or "").lower().strip()
     try:
-        model = parse_sysml_v1(str(model_content), source_path="<pasted model>")
+        model = parse_sysml_v1(str(model_content), source_path="<pasted model>",
+                               fmt=model_fmt or None)
     except Exception as exc:
         raise ReqGraphError(f"could not parse SysML v1 model: {exc}") from exc
 

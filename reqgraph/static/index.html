@@ -353,7 +353,8 @@
         <span class="grp">knowledge graph</span>
         <button class="ghost" onclick="dlExport('graphml')" title="Consolidated element-level GraphML">GraphML</button>
         <button class="ghost" onclick="dlExport('mermaid')">Mermaid</button>
-        <button class="ghost" onclick="dlExport('turtle')">Turtle</button>
+        <button class="ghost" onclick="dlExport('turtle')" title="Connections ontology (rg:)">Turtle</button>
+        <button class="ghost" onclick="dlExport('req_turtle')" title="Requirements ontology (reqont:)">Req Turtle</button>
         <button class="ghost" onclick="dlExport('cypher')">Cypher</button>
       </div>
     </div>
@@ -1241,9 +1242,12 @@ function dlExport(kind){
     graphml:[expLast.graphml, "requirements_consolidated.graphml", "application/xml"],
     mermaid:[expLast.mermaid, "requirements_connections.mmd", "text/plain"],
     turtle: [expLast.turtle, "requirements_connections.ttl", "text/turtle"],
+    req_turtle: [expLast.req_turtle, "requirements_ontology.ttl", "text/turtle"],
     cypher: [expLast.cypher, "requirements_connections.cypher", "text/plain"],
   };
-  const [data, name, mime] = map[kind];
+  const entry = map[kind];
+  if(!entry) return;
+  const [data, name, mime] = entry;
   if(data == null) return;
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([data], {type:mime}));

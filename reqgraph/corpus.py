@@ -361,8 +361,8 @@ class RequirementSetGraph:
             local_rid = _local(rid)
             text = self.texts[rid]
             lines.append(f"{REQONT}:{local_rid} a {REQONT}:Requirement ;")
-            lines.append(f"    {REQONT}:id {_ttl_literal(rid)!r} ;")
-            lines.append(f"    {REQONT}:text {_ttl_literal(text)!r} .")
+            lines.append(f'    {REQONT}:id "{_ttl_literal(rid)}" ;')
+            lines.append(f'    {REQONT}:text "{_ttl_literal(text)}" .')
             lines.append("")
 
             g = self.graphs[rid]
@@ -371,7 +371,7 @@ class RequirementSetGraph:
                     continue
                 elem_local = f"{local_rid}_{n.role.value.lower()}"
                 lines.append(f"{REQONT}:{elem_local} a {REQONT}:{n.role.value.capitalize()} ;")
-                lines.append(f"    rdfs:label {_ttl_literal(n.text.strip())!r} ;")
+                lines.append(f'    rdfs:label "{_ttl_literal(n.text.strip())}" ;')
                 lines.append(f"    {REQONT}:fromRequirement {REQONT}:{local_rid} .")
                 lines.append("")
 

@@ -602,7 +602,6 @@ def compare_v1(
 
             # Check satisfaction bonus
             sat_ids = satisfy_links.get(e.xmi_id, set())
-            via_sat = False
 
             for req_id, req_txt in r_elems:
                 name_s = score_fn(e.name, req_txt)
@@ -631,7 +630,6 @@ def compare_v1(
                         hops_used=context_hops,
                         via_satisfaction=(sat_bonus > 0.0),
                     )
-                    via_sat = (sat_bonus > 0.0)
 
             if best_match and best_match.confidence >= threshold:
                 all_matches.append(best_match)

@@ -253,15 +253,15 @@ class SysMLV1Model:
             st = e.stereotype or _strip_ns(e.element_type).replace(":", "_")
             uri = _uri(e)
             lines.append(f"{uri} a {KG}:{_local(st)} ;")
-            lines.append(f'    rdfs:label {_ttl_literal(e.name)!r} ;')
+            lines.append(f'    rdfs:label "{_ttl_literal(e.name)}" ;')
             if e.doc:
-                lines.append(f'    rdfs:comment {_ttl_literal(e.doc)!r} ;')
+                lines.append(f'    rdfs:comment "{_ttl_literal(e.doc)}" ;')
             if e.package:
                 lines.append(f"    {KG}:inPackage {KG}:{_local(e.package)} ;")
             if e.req_id:
-                lines.append(f'    {KG}:requirementId {_ttl_literal(e.req_id)!r} ;')
+                lines.append(f'    {KG}:requirementId "{_ttl_literal(e.req_id)}" ;')
             if e.req_text:
-                lines.append(f'    {KG}:requirementText {_ttl_literal(e.req_text)!r} ;')
+                lines.append(f'    {KG}:requirementText "{_ttl_literal(e.req_text)}" ;')
             # Trim trailing " ;" and replace with " ."
             lines[-1] = lines[-1][:-2] + " ."
             lines.append("")
@@ -424,6 +424,10 @@ def _parse_xmi(text: str, source_path: str = "") -> SysMLV1Model:
                     name = elem.get("name", "")
                     doc = ""
                     props = {}
+                    # Extract doc + properties only; descent into nested
+                    # children (ownedAttribute, subvertex, nestedClassifier) is
+                    # handled once by the outer recursion below -- do NOT recurse
+                    # here, or every child is visited twice (2^depth blow-up).
                     for child in elem:
                         child_local = _strip_ns(child.tag)
                         if child_local == "ownedComment":
@@ -435,8 +439,6 @@ def _parse_xmi(text: str, source_path: str = "") -> SysMLV1Model:
                                      child.get("{%s}idref" % _XMI_NS, ""))
                             if pname:
                                 props[pname] = ptype
-                        # nested elements (sub-activities, states, etc.)
-                        _collect(child, current_pkg=current_pkg)
 
                     raw[eid] = {"name": name, "type": etype, "is_pkg": False,
                                 "doc": doc, "properties": props,
@@ -822,14 +824,19 @@ def _detect_format(text: str, path: str = "") -> str:
     return "xmi"  # safe default
 
 
-def parse_sysml_v1(text: str, source_path: str = "") -> SysMLV1Model:
+def parse_sysml_v1(text: str, source_path: str = "",
+                   fmt: str | None = None) -> SysMLV1Model:
     """Parse SysML v1 XMI or Turtle text into a ``SysMLV1Model``.
 
-    Format is auto-detected from the content and *source_path* extension.
+    *fmt* may be ``"xmi"`` or ``"turtle"`` to force the parser; when omitted
+    (or any other value) the format is auto-detected from the content and the
+    *source_path* extension.
     """
     if not text or not text.strip():
         raise DataFormatError("empty SysML v1 input")
-    fmt = _detect_format(text, source_path)
+    fmt = (fmt or "").lower().strip()
+    if fmt not in ("xmi", "turtle"):
+        fmt = _detect_format(text, source_path)
     if fmt == "turtle":
         return _parse_turtle(text, source_path)
     return _parse_xmi(text, source_path)

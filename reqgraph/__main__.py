@@ -338,9 +338,11 @@ def cmd_export(args):
     csv_path   = args.csv     or (f"{prefix}.csv"     if prefix else None)
     json_path  = args.json    or (f"{prefix}.json"    if prefix else None)
     gml_path   = args.graphml or (f"{prefix}.graphml" if prefix else None)
+    rttl_path  = args.req_turtle or (f"{prefix}.req.ttl" if prefix else None)
 
-    if not any([csv_path, json_path, gml_path]):
-        sys.exit("error: specify --out-prefix or at least one of --csv / --json / --graphml")
+    if not any([csv_path, json_path, gml_path, rttl_path]):
+        sys.exit("error: specify --out-prefix or at least one of "
+                 "--csv / --json / --graphml / --req-turtle")
 
     # build set graph: parses every requirement and finds cross-req connections
     rsg = _build_set_graph_cli(
@@ -371,6 +373,10 @@ def cmd_export(args):
         with open(gml_path, "w", encoding="utf-8") as fh:
             fh.write(rsg.to_element_graphml())
         written.append(gml_path)
+    if rttl_path:
+        with open(rttl_path, "w", encoding="utf-8") as fh:
+            fh.write(rsg.to_req_turtle())
+        written.append(rttl_path)
 
     print(f"exported {len(rsg.req_ids)} requirements "
           f"({len(rsg.connections)} connections found)")
@@ -610,18 +616,22 @@ def main(argv=None):
 
     px = sub.add_parser(
         "export",
-        help="parse + quality + connections → CSV, JSON, consolidated element GraphML")
+        help="parse + quality + connections → CSV, JSON, GraphML, requirements Turtle")
     px.add_argument("infile",
                     help="input file (.csv, .xlsx, .xls, .json, .reqif, .xml)")
     px.add_argument("--out-prefix", default=None,
                     help="output path prefix; generates <prefix>.csv, <prefix>.json, "
-                         "<prefix>.graphml (overridden by individual flags)")
+                         "<prefix>.graphml, <prefix>.req.ttl "
+                         "(overridden by individual flags)")
     px.add_argument("--csv",     metavar="PATH", default=None,
                     help="explicit CSV output path")
     px.add_argument("--json",    metavar="PATH", default=None,
                     help="explicit JSON output path")
     px.add_argument("--graphml", metavar="PATH", default=None,
                     help="explicit consolidated element GraphML output path")
+    px.add_argument("--req-turtle", metavar="PATH", default=None,
+                    help="explicit requirements Turtle/RDF ontology output path "
+                         "(reqont: ontology)")
     px.add_argument("--template",  default="IREB-Rupp")
     px.add_argument("--backend",   default="rules", choices=["rules", "spacy", "bert"])
     px.add_argument("--model",     default=None,

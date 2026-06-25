@@ -962,6 +962,60 @@ def test_gui_export_request_rejects_empty():
         export_request(GuiState(), {"format": "csv", "content": "   "})
 
 
+# --- requirements Turtle (reqont:) export -----------------------------------
+
+def test_to_req_turtle_is_valid_rdflib_turtle():
+    """RequirementSetGraph.to_req_turtle() must produce well-formed Turtle."""
+    rdflib = pytest.importorskip("rdflib")
+    from reqgraph.corpus import build_requirement_set_graph
+    rsg = build_requirement_set_graph(SET_REQS)
+    ttl = rsg.to_req_turtle()
+    assert "reqont:" in ttl
+    g = rdflib.Graph()
+    g.parse(data=ttl, format="turtle")          # raises if malformed
+    assert len(g) > 0
+
+
+def test_to_req_turtle_escapes_special_characters():
+    """Requirement text with quotes must round-trip exactly (regression for the
+    `!r` double-escaping bug — _ttl_literal must be wrapped in double quotes)."""
+    rdflib = pytest.importorskip("rdflib")
+    from rdflib import URIRef
+    from reqgraph.corpus import build_requirement_set_graph
+    text = 'The system shall log "events" and stop.'
+    rsg = build_requirement_set_graph([("R1", text)])
+    g = rdflib.Graph()
+    g.parse(data=rsg.to_req_turtle(), format="turtle")
+    pred = URIRef("http://reqgraph.io/ontology/text")
+    texts = [str(o) for s, p, o in g if p == pred]
+    assert text in texts, texts
+
+
+def test_cli_export_req_turtle_flag(tmp_path):
+    rdflib = pytest.importorskip("rdflib")
+    from reqgraph.__main__ import main
+    csv_in = tmp_path / "in.csv"
+    csv_in.write_text("id,text\nR1,The system shall log events.\n", encoding="utf-8")
+    out = tmp_path / "req.ttl"
+    rc = main(["export", str(csv_in), "--req-turtle", str(out)])
+    assert rc == 0
+    assert out.exists()
+    g = rdflib.Graph()
+    g.parse(str(out), format="turtle")           # raises if malformed
+    assert len(g) > 0
+
+
+def test_gui_export_request_includes_req_turtle():
+    rdflib = pytest.importorskip("rdflib")
+    from reqgraph.gui import GuiState, export_request
+    pasted = "\n".join(t for _, t in SET_REQS)
+    d = export_request(GuiState(), {"format": "lines", "content": pasted})
+    assert "req_turtle" in d
+    g = rdflib.Graph()
+    g.parse(data=d["req_turtle"], format="turtle")
+    assert len(g) > 0
+
+
 def test_gui_export_plain_text_lines():
     """Pasting plain requirements one-per-line must work (regression: this used
     to fail because the backend assumed a CSV header)."""
