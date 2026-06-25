@@ -430,6 +430,49 @@ def test_build_context_hops_zero_is_element_only():
     assert len(ctx_2) >= len(ctx_0)
 
 
+def test_build_context_shared_neighbor_counted_once():
+    """A node reachable from two frontier nodes in the same hop must contribute
+    its text only once (regression: BFS appended it per incoming edge)."""
+    from reqgraph.core import Role
+    from reqgraph.sysml_v1_parser import V1Element, V1Relation, SysMLV1Model
+    from reqgraph.sysml_v1_compare import _build_context
+
+    def el(i, name):
+        return V1Element(xmi_id=i, name=name, element_type="uml:Class",
+                         stereotype="Block", role=Role.SUBJECT)
+    # Diamond: Start -> A, Start -> B, A -> Shared, B -> Shared
+    model = SysMLV1Model(
+        elements=[el("s", "Start"), el("a", "Alpha"), el("b", "Beta"),
+                  el("c", "SharedNeighbor")],
+        relations=[V1Relation("r1", "s", "a", "composition"),
+                   V1Relation("r2", "s", "b", "composition"),
+                   V1Relation("r3", "a", "c", "composition"),
+                   V1Relation("r4", "b", "c", "composition")],
+    )
+    start = model.elements[0]
+    ctx = _build_context(start, model, hops=2)
+    # "SharedNeighbor" is reachable via both A and B at hop 2 but must appear once
+    assert ctx.split().count("SharedNeighbor") == 1
+
+
+def test_req_coverage_partition_is_consistent():
+    """unmatched_reqs and matched req elements must partition all req elements:
+    len(unmatched) + matched_count == n_req_elements (regression: role-less
+    match keys made coverage and unmatched_reqs counts disagree)."""
+    from reqgraph.sysml_v1_parser import parse_sysml_v1
+    from reqgraph.sysml_v1_compare import compare_v1
+    m = parse_sysml_v1(AUTOMOTIVE_XMI)
+    reqs = ["The braking system shall decelerate the vehicle at 5 m/s.",
+            "The vehicle shall apply the brakes within 200 ms.",
+            "The controller shall log every brake event to the recorder."]
+    report = compare_v1(m, reqs, threshold=0.3, context_hops=2)
+    matched = round(report.req_coverage * report.n_req_elements)
+    assert len(report.unmatched_reqs) + matched == report.n_req_elements
+    # every unmatched entry carries an explicit role (role-aware keying)
+    for rid, role, txt in report.unmatched_reqs:
+        assert role  # non-empty role string
+
+
 # ---------------------------------------------------------------------------
 # Comparison tests
 # ---------------------------------------------------------------------------
