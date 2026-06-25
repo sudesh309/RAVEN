@@ -92,7 +92,9 @@ def _build_context(element: V1Element, model: SysMLV1Model, hops: int = 2) -> st
                     nid = rel.target_id
                 elif rel.target_id == eid and rel.source_id not in visited:
                     nid = rel.source_id
-                if nid:
+                # guard against next_frontier too: a node reachable from two
+                # frontier nodes in the same hop must only contribute its text once
+                if nid and nid not in next_frontier:
                     neighbor = elem_index.get(nid)
                     if neighbor:
                         parts.extend([neighbor.name, neighbor.doc or "",
@@ -652,14 +654,17 @@ def compare_v1(
                 if conf > best_conf:
                     best_conf = conf
             if best_conf >= threshold:
-                matched_req_keys.add((req_id, req_txt))
+                # Key by (req_id, role, text): the same (id, text) can appear
+                # under several roles, and each role's match must be counted
+                # independently — see all_req_elems, which is NOT deduplicated.
+                matched_req_keys.add((req_id, role, req_txt))
 
         # Role-level coverage
         mc = (sum(1 for e in m_elems
                   if (e.xmi_id or e.name) in matched_model_ids) / len(m_elems)
               if m_elems else 0.0)
         rc = (sum(1 for (rid, txt) in r_elems
-                  if (rid, txt) in matched_req_keys) / len(r_elems)
+                  if (rid, role, txt) in matched_req_keys) / len(r_elems)
               if r_elems else 0.0)
         s = (2 * mc * rc / (mc + rc)) if (mc + rc) > 0 else 0.0
 
@@ -675,6 +680,8 @@ def compare_v1(
     n_model = len(model_elems)
     n_req = len(all_req_elems)
     overall_mc = (len(matched_model_ids) / n_model) if n_model else 0.0
+    # matched_req_keys is (req_id, role, text); all_req_elems is the same
+    # granularity, so the ratio is well-defined.
     overall_rc = (len(matched_req_keys) / n_req) if n_req else 0.0
     semantic_match = ((2 * overall_mc * overall_rc / (overall_mc + overall_rc))
                       if (overall_mc + overall_rc) > 0 else 0.0)
@@ -686,7 +693,7 @@ def compare_v1(
     unmatched_reqs = [
         (rid, role.value, txt)
         for rid, role, txt in all_req_elems
-        if (rid, txt) not in matched_req_keys
+        if (rid, role, txt) not in matched_req_keys
     ]
 
     # Sort matches by confidence descending

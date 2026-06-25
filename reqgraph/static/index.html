@@ -142,17 +142,63 @@
     text-transform:uppercase;color:var(--muted);margin:16px 0 8px}
   .score-bar-wrap{display:flex;align-items:center;gap:6px}
   .score-bar{height:7px;border-radius:3px;display:inline-block;min-width:4px}
+  /* ── workflow: numbered steps + concise per-card guidance ── */
+  .muted{color:var(--muted);font-size:13px;line-height:1.55;margin:0 0 10px}
+  .card h2 .step{display:inline-flex;align-items:center;justify-content:center;
+    width:21px;height:21px;border-radius:50%;background:var(--accent);color:#fff;
+    font-size:11.5px;font-weight:700;margin-right:9px;letter-spacing:0;
+    text-transform:none;vertical-align:middle;flex:none}
+  .card h2{display:flex;align-items:center}
+  .lead{font-size:13px;color:var(--muted);margin:0 0 12px;line-height:1.55}
+  .lead b{color:var(--text);font-weight:600}
+  /* top-of-page workflow map */
+  #workflow{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:4px}
+  #workflow .wf{display:flex;align-items:center;gap:7px;font-size:12.5px;
+    color:var(--muted);background:var(--card);border:1px solid var(--border);
+    border-radius:99px;padding:5px 13px 5px 6px}
+  #workflow .wf .n{display:inline-flex;align-items:center;justify-content:center;
+    width:19px;height:19px;border-radius:50%;background:var(--accent-soft);
+    color:var(--accent);font-size:11px;font-weight:700}
+  #workflow .wf b{color:var(--text);font-weight:600}
+  /* SysML v1 error / warn boxes (style only — visibility stays on [hidden]) */
+  #v1-error{background:var(--bad-soft);color:var(--bad);border:1px solid #f0c0c0;
+    border-radius:8px;padding:9px 13px;font-size:14px;margin-top:10px}
+  #v1-warn{background:#FBF3E2;color:#7A5A12;border:1px solid #ECD9A6;
+    border-radius:8px;padding:9px 13px;font-size:13.5px;margin-top:10px}
+  /* ontology comparison view (replaces raw mermaid dump) */
+  .ont-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:12px}
+  @media(max-width:720px){.ont-grid{grid-template-columns:1fr}}
+  .ont-col h4{font-size:11px;text-transform:uppercase;letter-spacing:.05em;
+    color:var(--muted);margin:0 0 8px;font-weight:600}
+  .ont-chip{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;
+    padding:4px 11px;border-radius:99px;border:1px solid #d9d6f5;
+    background:var(--accent-soft);color:var(--accent);margin:0 5px 6px 0}
+  .ont-chip .cnt{font-weight:700}
+  .ont-map li{margin-bottom:5px;line-height:1.5}
+  .ont-map .arr{color:var(--accent);font-weight:700;margin:0 5px}
 </style>
 </head>
 <body>
 <header>
   <h1>reqgraph studio</h1>
-  <span class="sub">requirement &rarr; semantic graph, losslessly</span>
+  <span class="sub">turn requirements &amp; models into semantic graphs</span>
   <span class="ver" id="ver"></span>
 </header>
 <main>
+  <nav id="workflow" aria-label="Tools on this page">
+    <span class="wf"><span class="n">1</span><b>Parse</b> one requirement</span>
+    <span class="wf"><span class="n">2</span><b>Connect</b> a set (quick)</span>
+    <span class="wf"><span class="n">3</span><b>Import &amp; analyze</b> a set + quality</span>
+    <span class="wf"><span class="n">4</span><b>Compare</b> SysML v2 model</span>
+    <span class="wf"><span class="n">5</span><b>Compare</b> SysML v1 model</span>
+  </nav>
   <section class="card">
-    <h2>Requirement</h2>
+    <h2><span class="step">1</span>Parse a requirement</h2>
+    <p class="lead">Type or load one requirement. It is split into IREB roles
+      (<b>subject</b>, <b>process</b>, <b>object</b>, <b>condition</b>…) and drawn
+      as a semantic graph — every character is kept, so the graph regenerates the
+      exact original text. Pick a <b>template</b> (sentence structure) and a
+      <b>backend</b> (how roles are detected) below.</p>
     <textarea id="text" spellcheck="false"></textarea>
     <div class="controls">
       <div class="ctl"><label for="example">Example</label>
@@ -219,12 +265,11 @@
   </section>
 
   <section class="card">
-    <h2>Requirement set &mdash; find connections</h2>
-    <div class="hint" style="margin:0 0 8px;display:block">
-      <b>Quick look:</b> paste one requirement per line and see which lines share a
-      similar subject/object. For file import (CSV/Excel/JSON/ReqIF), quality
-      scoring and extra attributes, use <b>Import &amp; analyze</b> below.
-    </div>
+    <h2><span class="step">2</span>Find connections in a set</h2>
+    <p class="lead">Paste one requirement per line. reqgraph parses each, then links
+      any two that share a similar <b>subject</b> or <b>object</b> — a fast way to
+      spot related or duplicate requirements. Need files, quality scores or extra
+      columns? Use <b>step 3</b> below.</p>
     <textarea id="set-text" spellcheck="false" style="min-height:130px"></textarea>
     <div class="controls">
       <div class="ctl"><label for="set-example">Example</label>
@@ -279,14 +324,13 @@
 
   <!-- ── Import & analyze ───────────────────────────────────────────── -->
   <section class="card">
-    <h2>Import &amp; analyze requirement set</h2>
-    <div class="hint" style="margin:0 0 10px;display:block">
-      Run the full pipeline over a whole set: parse every requirement, score its
-      quality, and find requirements that share a similar subject/object. Upload a
-      file or paste text. Extra columns like <em>rationale</em>,
-      <em>applicability</em>, <em>additional_info</em> are detected automatically
-      and preserved in every output.
-    </div>
+    <h2><span class="step">3</span>Import &amp; analyze a set</h2>
+    <p class="lead">The full pipeline over a whole document: parse every
+      requirement, score its <b>quality</b> (weak words, atomicity, EARS pattern,
+      type) and find cross-requirement connections. Upload a file
+      (<b>CSV / Excel / JSON / ReqIF</b>) or paste text — extra columns like
+      <em>rationale</em> or <em>applicability</em> are detected and kept in every
+      download.</p>
     <div class="tab-btns">
       <button class="tab-btn active" id="exp-tab-paste" onclick="expTab('paste')">&#128203; Paste text</button>
       <button class="tab-btn" id="exp-tab-file" onclick="expTab('file')">&#128193; Upload file</button>
@@ -402,15 +446,13 @@
 
   <!-- ── Compare Model vs Requirements ──────────────────────────── -->
   <section class="card">
-    <h2>Compare model vs requirements</h2>
-    <div class="hint" style="margin:0 0 10px;display:block">
-      Paste a <b>SysML v2 model</b> and a set of <b>requirements</b> to check semantic
-      coverage. The model's structural and behavioural elements (parts, actions, states,
-      attributes) are matched against the parsed IREB roles from each requirement.
-      You get: overall <em>semantic match %</em>, <em>model coverage</em> (model
-      elements traced to requirements), <em>requirement coverage</em> (requirements
-      reflected in the model), and a per-element gap report.
-    </div>
+    <h2><span class="step">4</span>Compare a SysML v2 model</h2>
+    <p class="lead">Check how well a <b>SysML v2 model</b> and your <b>requirements</b>
+      line up. Model elements (parts, actions, states, attributes) are matched to the
+      IREB roles in each requirement, giving a <b>semantic match %</b>,
+      <b>model coverage</b> (elements traced to requirements), <b>requirement
+      coverage</b> (requirements reflected in the model), and a gap list for both
+      sides.</p>
     <div class="cmp-two-col">
       <div>
         <div class="ctl" style="margin-bottom:6px">
@@ -518,10 +560,12 @@
 
   <!-- ── Compare SysML v1 Model (XMI / Turtle) vs Requirements ──────────── -->
   <section class="card">
-    <h2>Compare SysML v1 Model (XMI / Turtle) vs Requirements</h2>
-    <p class="muted">Context-aware semantic comparison: each element's score uses its
-    graph neighborhood (BFS hops), not just its name.
-    Confidence = 0.25 × name + 0.55 × context + 0.20 × satisfaction bonus.</p>
+    <h2><span class="step">5</span>Compare a SysML v1 model</h2>
+    <p class="lead">For older <b>SysML v1</b> models exported as <b>XMI</b> (MagicDraw,
+      Cameo, Papyrus) or <b>Turtle/RDF</b>. Unlike step 4, each element is scored by
+      its <b>graph neighborhood</b>, not just its name — so a block surrounded by
+      telling parts and links matches better than its bare label. Pick the model
+      format below, paste your requirements, and compare.</p>
 
     <!-- Format tabs -->
     <div style="display:flex;gap:8px;margin-bottom:8px;">
@@ -587,14 +631,14 @@
       </p>
     </details>
 
-    <div id="v1-error" class="error" hidden></div>
-    <div id="v1-warn" class="warn" hidden></div>
+    <div id="v1-error" hidden></div>
+    <div id="v1-warn" hidden></div>
   </section>
 
   <section class="card" id="v1cmpcard" hidden>
     <h2>SysML v1 Comparison Results</h2>
-    <div class="cmp-section-head">KPI Summary</div>
-    <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px" id="v1-kpis"></div>
+    <div class="cmp-section-head">Summary</div>
+    <div class="kpis" id="v1-kpis" style="margin-bottom:16px"></div>
 
     <div class="cmp-section-head">Role Breakdown</div>
     <div style="overflow-x:auto;margin-bottom:16px">
@@ -649,18 +693,39 @@
     </div>
 
     <div id="v1-tab-ontology-panel" hidden>
-      <div class="cmp-section-head">Ontology Comparison (IREB roles vs SysML element types)</div>
-      <pre id="v1-ontology-mermaid" style="font-size:.8rem;overflow:auto;background:#f5f5f5;
-           padding:12px;border-radius:6px;max-height:300px"></pre>
+      <p class="lead" style="margin-top:4px">Two vocabularies side by side: the
+        <b>requirement ontology</b> (IREB roles found in your text) and the
+        <b>model ontology</b> (SysML element types in the model), with the
+        <b>mappings</b> the comparison discovered between them.</p>
+      <div class="ont-grid">
+        <div class="ont-col">
+          <h4>Requirement ontology — IREB roles</h4>
+          <div id="v1-ont-req"></div>
+        </div>
+        <div class="ont-col">
+          <h4>Model ontology — SysML types</h4>
+          <div id="v1-ont-model"></div>
+        </div>
+      </div>
+      <h4 style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;
+        color:var(--muted);margin:0 0 8px;font-weight:600">Mappings (model type
+        &rarr; requirement role)</h4>
+      <ul class="ont-map" id="v1-ont-map" style="margin:0;padding-left:18px"></ul>
     </div>
 
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:16px">
-      <button onclick="dlV1('json')">⬇ JSON</button>
-      <button onclick="dlV1('graphml')">⬇ GraphML (match)</button>
-      <button onclick="dlV1('kg_graphml')">⬇ KG GraphML (full model)</button>
-      <button onclick="dlV1('model_turtle')">⬇ Model Turtle</button>
-      <button onclick="dlV1('mermaid')">⬇ Mermaid</button>
-      <button onclick="dlV1('ontology_graphml')">⬇ Ontology GraphML</button>
+    <div class="row-head" style="margin-top:16px">
+      <span class="grp" style="font-size:10.5px;letter-spacing:.04em;
+        text-transform:uppercase;color:var(--muted)">download</span>
+      <div class="exports" style="margin-left:8px">
+        <button class="ghost" onclick="dlV1('json')">JSON</button>
+        <button class="ghost" onclick="dlV1('mermaid')">Mermaid</button>
+        <span class="sep"></span>
+        <span class="grp">knowledge graph</span>
+        <button class="ghost" onclick="dlV1('graphml')" title="Bipartite match graph">Match GraphML</button>
+        <button class="ghost" onclick="dlV1('kg_graphml')" title="Full model knowledge graph">Model KG</button>
+        <button class="ghost" onclick="dlV1('model_turtle')">Model Turtle</button>
+        <button class="ghost" onclick="dlV1('ontology_graphml')">Ontology GraphML</button>
+      </div>
     </div>
   </section>
 </main>
@@ -1520,12 +1585,36 @@ function renderCompareV1Results(d) {
         `<li>${esc(r.req_id)} [${esc(r.role)}] ${esc(r.text.length>60?r.text.slice(0,57)+"…":r.text)}</li>`
       ).join("")}</ul>`;
 
-  // Ontology Mermaid
-  if (d.ontology_mermaid) {
-    $("v1-ontology-mermaid").textContent = d.ontology_mermaid;
-  }
+  // Ontology view (readable, built from ontology_diff)
+  renderV1Ontology(d.ontology_diff);
 
   $("v1cmpcard").hidden = false;
+}
+
+function ontChip(label, count){
+  return `<span class="ont-chip">${esc(label)}<span class="cnt">${count}</span></span>`;
+}
+
+function renderV1Ontology(od){
+  od = od || {};
+  const reqN = od.req_ontology_nodes || [];
+  const modN = od.model_ontology_nodes || [];
+  const maps = od.mappings || [];
+  $("v1-ont-req").innerHTML = reqN.length
+    ? reqN.map(n => ontChip(n.type, n.count)).join("")
+    : `<span style="color:var(--muted);font-size:13px">no requirement roles found</span>`;
+  $("v1-ont-model").innerHTML = modN.length
+    ? modN.map(n => ontChip(n.type, n.count)).join("")
+    : `<span style="color:var(--muted);font-size:13px">no model types found</span>`;
+  $("v1-ont-map").innerHTML = maps.length
+    ? maps.map(m =>
+        `<li><b>${esc(m.model_type)}</b><span class="arr">&rarr;</span>${esc(m.req_role)}
+         <span style="color:var(--muted);font-size:12px">
+         (${(m.mean_confidence*100).toFixed(0)}% mean confidence over
+         ${m.n_matches} match${m.n_matches!==1?"es":""})</span></li>`
+      ).join("")
+    : `<li style="color:var(--muted);list-style:none;margin-left:-18px">no mappings —
+       lower the threshold or enable more roles to surface matches</li>`;
 }
 
 function v1ShowResTab(tab) {
