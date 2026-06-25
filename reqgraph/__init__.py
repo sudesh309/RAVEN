@@ -35,6 +35,10 @@ from .corpus import (Connection, ElementRef, RequirementSetGraph,
 from .io_formats import (read_requirements_json,)
 from .sysml_parser import SysMLElement, SysMLModel, parse_sysml, read_sysml
 from .sysml_compare import ComparisonReport, MatchDetail, compare as compare_sysml
+from .sysml_v1_parser import (V1Element, V1Relation, SysMLV1Model,
+                               parse_sysml_v1, read_sysml_v1)
+from .sysml_v1_compare import (V1MatchDetail, V1ComparisonReport, OntologyDiff,
+                                compare_v1, ontology_diff)
 
 # library logging etiquette: emit nothing unless the application configures it
 _logging.getLogger(__name__).addHandler(_logging.NullHandler())
@@ -49,6 +53,8 @@ __all__ = [
     "read_requirements_json",
     "SysMLElement", "SysMLModel", "parse_sysml", "read_sysml",
     "ComparisonReport", "MatchDetail", "compare_sysml",
+    "V1Element", "V1Relation", "SysMLV1Model", "parse_sysml_v1", "read_sysml_v1",
+    "V1MatchDetail", "V1ComparisonReport", "OntologyDiff", "compare_v1", "ontology_diff",
     "ReqGraphError", "GraphIntegrityError", "ExtractionError",
     "TemplateError", "DataFormatError", "ModelError",
 ]

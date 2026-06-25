@@ -34,6 +34,16 @@ POST /api/compare     {model_content, req_content, req_format?, template?, backe
                       report the semantic match percentage.  ``model_content`` is
                       the raw SysML v2 text; ``req_content`` is the requirement
                       text (plain / CSV / JSON as indicated by ``req_format``).
+POST /api/compare-v1  {model_content, model_format?, req_content, req_format?,
+                       context_hops?, threshold?, similarity?, roles?,
+                       template?, backend?} ->
+                      {semantic_match, model_coverage, req_coverage,
+                       role_breakdown, matches, unmatched_model, unmatched_reqs,
+                       graphml, mermaid, kg_graphml, model_turtle,
+                       ontology_mermaid, ontology_graphml, warnings, error?}
+                      -- context-aware comparison of a SysML v1 XMI/Turtle
+                      model against a requirement set using graph neighborhood
+                      context (BFS up to context_hops) + satisfaction bonus.
 
 Design notes
 ------------
@@ -537,6 +547,113 @@ def compare_request(state: GuiState, payload: dict) -> dict:
     return result
 
 
+def compare_v1_request(state: GuiState, payload: dict) -> dict:
+    """Handle one /api/compare-v1 payload.
+
+    Parses a SysML v1 XMI or Turtle model from ``model_content`` and a
+    requirement set from ``req_content``, runs context-aware semantic
+    comparison (BFS neighborhood context + satisfaction bonus), and returns
+    the full V1ComparisonReport as a JSON-serialisable dict plus KG exports.
+
+    Payload keys
+    ------------
+    model_content : str
+        Raw SysML v1 XMI or Turtle/RDF text.
+    model_format : str, optional
+        ``"xmi"`` (default) or ``"turtle"``; if omitted, auto-detected.
+    req_content : str
+        Requirement text (plain / CSV / JSON as indicated by ``req_format``).
+    req_format : str, optional
+        Format of ``req_content`` (default plain).
+    context_hops : int, optional
+        BFS depth for neighborhood context building (default 2).
+    threshold : float, optional
+        Confidence cut-off 0–1 (default 0.5).
+    similarity : str, optional
+        ``"lexical"`` (default) or ``"embedding"``.
+    roles : list[str], optional
+        Semantic roles to compare.
+    template / backend : str, optional
+        Requirement parsing template / extraction backend.
+    """
+    from .sysml_v1_parser import parse_sysml_v1
+    from .sysml_v1_compare import compare_v1 as _compare_v1
+
+    model_content = payload.get("model_content", "")
+    req_content = payload.get("req_content", "")
+
+    if not model_content or not str(model_content).strip():
+        raise ReqGraphError(
+            "please paste a SysML v1 XMI or Turtle model in the left panel")
+    if not req_content or not str(req_content).strip():
+        raise ReqGraphError(
+            "please paste requirements (one per line, or CSV/JSON) in the right panel")
+
+    warnings: list = []
+
+    # Parse the SysML v1 model (auto-detect or use model_format hint)
+    try:
+        model = parse_sysml_v1(str(model_content), source_path="<pasted model>")
+    except Exception as exc:
+        raise ReqGraphError(f"could not parse SysML v1 model: {exc}") from exc
+
+    # Parse the requirements
+    fmt = (payload.get("req_format") or "").lower().strip()
+    items = _read_items_from_content(req_content, fmt, "utf-8", warnings)
+    if not items:
+        raise ReqGraphError(
+            "no requirements found — check the content and format selector")
+
+    # Build comparison
+    template = TEMPLATES.get(payload.get("template", ""), RUPP_TEMPLATE)
+    backend = payload.get("backend", "rules")
+    similarity = payload.get("similarity", "lexical")
+    if similarity not in ("lexical", "embedding"):
+        raise ReqGraphError(
+            f"unknown similarity {similarity!r}; use 'lexical' or 'embedding'")
+    threshold = _coerce_threshold(payload, warnings)
+
+    try:
+        context_hops = int(payload.get("context_hops", 2))
+        context_hops = max(0, min(5, context_hops))
+    except (TypeError, ValueError):
+        context_hops = 2
+
+    roles_raw = payload.get("roles") or ["SUBJECT", "PROCESS", "OBJECT", "CONDITION"]
+    try:
+        roles = tuple(Role(r) for r in roles_raw)
+    except ValueError as exc:
+        raise ReqGraphError(
+            f"unknown role {exc}; choose from "
+            f"{', '.join(r.value for r in Role)}") from exc
+
+    embedding_model = payload.get("embedding_model", "prajjwal1/bert-tiny")
+
+    try:
+        report = _compare_v1(model, items, roles=roles, threshold=threshold,
+                             similarity=similarity,
+                             embedding_model=embedding_model,
+                             context_hops=context_hops,
+                             template=template,
+                             extractor=state.extractor(backend))
+    except ImportError as exc:
+        raise ReqGraphError(
+            "the 'embedding' similarity needs PyTorch + transformers installed "
+            f"({exc}); switch Similarity back to 'lexical'") from exc
+
+    warnings.extend(report.warnings)
+
+    result = report.to_dict()
+    result["graphml"] = report.to_graphml()
+    result["mermaid"] = report.to_mermaid()
+    result["kg_graphml"] = model.to_graphml()
+    result["model_turtle"] = model.to_turtle()
+    if report.ontology_diff:
+        result["ontology_mermaid"] = report.ontology_diff.to_mermaid()
+        result["ontology_graphml"] = report.ontology_diff.to_graphml()
+    return result
+
+
 def _read_items_from_content(content: str, fmt: str, encoding: str,
                              warnings: list) -> list:
     """Turn pasted text or an uploaded file into ``(id, text, meta)`` items.
@@ -641,7 +758,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if self.path not in ("/api/parse", "/api/connections",
-                             "/api/export", "/api/compare"):
+                             "/api/export", "/api/compare", "/api/compare-v1"):
             self.send_error(404)
             return
         try:
@@ -653,6 +770,8 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send_json(connections_request(self.state, payload))
             elif self.path == "/api/compare":
                 self._send_json(compare_request(self.state, payload))
+            elif self.path == "/api/compare-v1":
+                self._send_json(compare_v1_request(self.state, payload))
             else:
                 self._send_json(export_request(self.state, payload))
         except ReqGraphError as exc:

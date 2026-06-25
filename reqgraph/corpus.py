@@ -331,6 +331,60 @@ class RequirementSetGraph:
         lines.append('</graphml>')
         return "\n".join(lines)
 
+    def to_req_turtle(self, base: str = "http://reqgraph.io/ontology/") -> str:
+        """Serialize the requirement set as a Turtle/RDF ontology.
+
+        Uses the reqgraph requirement ontology (``reqont:``).  Each requirement
+        becomes a ``reqont:Requirement`` with its IREB elements exported as
+        typed sub-resources connected via ``reqont:fromRequirement``.
+        Cross-requirement similarity edges are exported as
+        ``reqont:similarTo`` triples.
+        """
+        from .core import _ttl_literal
+
+        REQONT = "reqont"
+        lines = [
+            f"@prefix {REQONT}: <{base}> .",
+            "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .",
+            "",
+        ]
+
+        import re as _re
+        _id_re = _re.compile(r"[^A-Za-z0-9_]")
+
+        def _local(s: str) -> str:
+            safe = _id_re.sub("_", s.strip()) or "req"
+            return safe if not safe[0].isdigit() else f"r_{safe}"
+
+        # Emit one Requirement node per req_id + its IREB element nodes
+        for rid in self.req_ids:
+            local_rid = _local(rid)
+            text = self.texts[rid]
+            lines.append(f"{REQONT}:{local_rid} a {REQONT}:Requirement ;")
+            lines.append(f"    {REQONT}:id {_ttl_literal(rid)!r} ;")
+            lines.append(f"    {REQONT}:text {_ttl_literal(text)!r} .")
+            lines.append("")
+
+            g = self.graphs[rid]
+            for n in g.elements():
+                if n.role.value == "GLUE":
+                    continue
+                elem_local = f"{local_rid}_{n.role.value.lower()}"
+                lines.append(f"{REQONT}:{elem_local} a {REQONT}:{n.role.value.capitalize()} ;")
+                lines.append(f"    rdfs:label {_ttl_literal(n.text.strip())!r} ;")
+                lines.append(f"    {REQONT}:fromRequirement {REQONT}:{local_rid} .")
+                lines.append("")
+
+        # Cross-requirement similarity edges
+        for c in self._dedup_pairs():
+            a_local = _local(c.a.req_id)
+            b_local = _local(c.b.req_id)
+            a_elem = f"{a_local}_{c.role.value.lower()}"
+            b_elem = f"{b_local}_{c.role.value.lower()}"
+            lines.append(f"{REQONT}:{a_elem} {REQONT}:similarTo {REQONT}:{b_elem} .")
+
+        return "\n".join(lines)
+
     def to_dataframe(self, analyze: bool = True):
         """Flat quality table aligned with the (split) requirements in this set.
 
