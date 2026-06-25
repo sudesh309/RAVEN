@@ -1,44 +1,54 @@
-# reqgraph — Architecture & Data-Flow Reference (v1.0.0)
+# reqgraph — Architecture & Data-Flow Reference (v2.0.0)
 
 How data is processed at **module and function level**, from raw requirement
-text to graph and back, including the ML, quality, and I/O pipelines.
+text to graph and back, including the ML, quality, I/O, and model-comparison
+pipelines.
 
 ---
 
 ## 1. System overview
 
 ```
-┌────────────────────────────────────────────────────────────────────────┐
-│                            APPLICATION LAYER                           │
-│   __main__.py (CLI: parse/batch/train/analyze/gui)   your Python code  │
-│   gui.py (local web GUI: stdlib http.server + static/index.html)       │
-├────────────────────────────────────────────────────────────────────────┤
-│                            SERVICE LAYER                               │
-│   parser.RequirementParser      io_formats (CSV/Excel/ReqIF)           │
-│   parser.build_requirement      quality.enrich (smells/type/EARS)      │
-│                                 nlp.RequirementAnalyzer (dup/conflict) │
-│   corpus.build_requirement_set_graph (cross-requirement SUBJECT/OBJECT)│
-├────────────────────────────────────────────────────────────────────────┤
-│                      EXTRACTION LAYER (Strategy)                       │
-│   extractors.Extractor (ABC)                                           │
-│     ├─ RuleExtractor   (deterministic anchors, default)                │
-│     ├─ SpacyExtractor  (dependency parse)                              │
-│     └─ BertTaggerExtractor ──▶ nlp.BertTokenTagger (PyTorch)           │
-├────────────────────────────────────────────────────────────────────────┤
-│                        ENGINE LAYER (invariant)                        │
-│   tiling.tile_to_graph  — lossless char-level tiling                   │
-│   templates.Template    — frozen config (markers, slot order)          │
-├────────────────────────────────────────────────────────────────────────┤
-│                            MODEL LAYER                                 │
-│   core.RequirementGraph / Node / Edge / Role / Rel                     │
-│   exporters: JSON · Mermaid · DOT · Cypher · GraphML · Turtle · networkx│
-│   errors.py (exception hierarchy)  ·  logging (per-module loggers)     │
-└────────────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────────┐
+│                             APPLICATION LAYER                              │
+│  __main__.py  CLI: parse / batch / train / analyze / connections /         │
+│               export / compare / compare-v1 / gui                          │
+│  gui.py       local web GUI  (stdlib http.server + static/index.html)      │
+├────────────────────────────────────────────────────────────────────────────┤
+│                          MODEL COMPARISON LAYER                            │
+│  sysml_parser.py     SysML v2 textual notation → SysMLModel                │
+│  sysml_compare.py    role-bucketed comparison  → ComparisonReport          │
+│  sysml_v1_parser.py  SysML v1 XMI / Turtle    → SysMLV1Model + KG         │
+│  sysml_v1_compare.py context-aware comparison  → V1ComparisonReport        │
+│                       BFS neighborhood scoring · OntologyDiff              │
+├────────────────────────────────────────────────────────────────────────────┤
+│                             SERVICE LAYER                                  │
+│  parser.RequirementParser        io_formats (CSV/Excel/JSON/ReqIF)         │
+│  parser.build_requirement        quality.enrich (smells/type/EARS)         │
+│                                  nlp.RequirementAnalyzer (dup/conflict)    │
+│  corpus.build_requirement_set_graph                                        │
+│    to_element_graphml()  to_req_turtle()  to_turtle()  to_cypher() …       │
+├────────────────────────────────────────────────────────────────────────────┤
+│                        EXTRACTION LAYER (Strategy)                         │
+│  extractors.Extractor (ABC)                                                │
+│    ├─ RuleExtractor   (deterministic anchors, default)                     │
+│    ├─ SpacyExtractor  (dependency parse)                                   │
+│    └─ BertTaggerExtractor ──▶ nlp.BertTokenTagger (PyTorch)                │
+├────────────────────────────────────────────────────────────────────────────┤
+│                          ENGINE LAYER (invariant)                          │
+│  tiling.tile_to_graph  — lossless char-level tiling                        │
+│  templates.Template    — frozen config (markers, slot order)               │
+├────────────────────────────────────────────────────────────────────────────┤
+│                             MODEL LAYER                                    │
+│  core.RequirementGraph / Node / Edge / Role / Rel                          │
+│  exporters: JSON · Mermaid · DOT · Cypher · GraphML · Turtle · networkx    │
+│  errors.py (exception hierarchy)  ·  logging (per-module loggers)         │
+└────────────────────────────────────────────────────────────────────────────┘
 ```
 
 **Dependency rule:** layers depend only downward. The engine and model layers
-have **zero third-party dependencies**; spaCy/torch/pandas are imported lazily
-inside the functions that need them, so the core works on any machine.
+have **zero third-party dependencies**; spaCy/torch/pandas/rdflib are imported
+lazily inside the functions that need them, so the core works on any machine.
 
 ### Core data types
 
@@ -270,6 +280,13 @@ argv ─▶ argparse (global: -v/-vv → logging level, --version)
   analyze      infile ─▶ per-row enrich report + embed dup/conflict report
   connections  infile ─▶ build_requirement_set_graph ─▶ text|json|mermaid|dot|
                graphml|turtle|cypher (pipeline 5a)
+  export       infile (CSV/Excel/JSON/ReqIF) ─▶ parse+enrich+connections ─▶
+               --csv / --json / --graphml / --req-turtle  (pipeline 6a)
+  compare      model.sysml reqs ─▶ parse_sysml + compare ─▶ text|json
+               --report PATH  --graphml PATH  (pipeline 7)
+  compare-v1   model.xmi|ttl reqs ─▶ read_sysml_v1 + compare_v1 ─▶ text|json
+               --context-hops N  --kg PATH  --out-turtle PATH
+               --ontology-graphml PATH  (pipeline 8)
 errors: any ReqGraphError ─▶ exit("error: …")  (no tracebacks for users)
 ```
 
@@ -277,31 +294,47 @@ errors: any ReqGraphError ─▶ exit("error: …")  (no tracebacks for users)
 
 ## 8a. Pipeline 6 — GUI                              [gui.py · static/index.html]
 
+Five endpoints, all pure functions (no side-effects beyond the backend cache):
+
 ```
 browser ──GET /──▶ static/index.html  (single page, no CDN, offline)
         ──GET /api/info──▶ {templates, backends availability, version}
-        ──POST /api/parse {text, template, backend}──▶
-gui.parse_request (pure function)
-  │  GuiState.extractor(name)     lazy, lock-guarded backend cache
-  │  RequirementParser.parse      (pipeline 1) + quality.enrich
-  │  _compute_kpis                round-trip, score 0-100 (smell deductions),
-  │                               coverage % = semantic chars / total chars,
-  │                               type, EARS, obligation, actions/operator
-  │  _graph_to_tree               nested ROOT-down tree, children in text order
-  │  tiles                        leaf_order → [{role, text}] (lossless strip)
-  ▼
-JSON ──▶ browser JS renders: KPI cards · tiled text · SVG tree layout
-         (leaf-slot tidy layout, role color map) · element table · downloads
 
-        ──POST /api/connections {texts, template, backend, similarity,
-                                  threshold, roles}──▶
-gui.connections_request (pure function) ─▶ build_requirement_set_graph
-         (pipeline 5a) ─▶ JSON {requirements, connections, mermaid, dot,
-                                 graphml, turtle, cypher}
-  ▼
-browser JS renders: circular network graph (one node per requirement, edges
-colored/weighted by role+score) · connections table · downloads
+──POST /api/parse {text, template, backend}──▶
+  gui.parse_request
+    │ parse (pipeline 1) + enrich + _compute_kpis + _graph_to_tree + tiles
+    ▼ JSON: KPI cards · tiled text · SVG tree · element table · downloads
+
+──POST /api/connections {texts, similarity, threshold, roles, …}──▶
+  gui.connections_request ─▶ build_requirement_set_graph (pipeline 5a)
+    ▼ JSON: {requirements, connections, mermaid, dot, graphml, turtle, cypher}
+      circular network graph · connections table · downloads
+
+──POST /api/export {content, format, threshold, similarity, …}──▶
+  gui.export_request ─▶ reader → build_requirement_set_graph → enrich →
+    requirements_to_dataframe  (pipeline 6a)
+    ▼ JSON: {requirements, connections, n_*, mermaid, graphml,
+             turtle, req_turtle, cypher, csv_data}
+      quality table (auto-discovers extra metadata columns) · connections
+      graph · download buttons (CSV / JSON / GraphML / Req Turtle / …)
+
+──POST /api/compare {model_content, req_content, threshold, similarity, …}──▶
+  gui.compare_request ─▶ parse_sysml + compare  (pipeline 7)
+    ▼ JSON: {semantic_match, model_coverage, req_coverage,
+             role_breakdown, matches, unmatched_model, unmatched_reqs,
+             graphml, mermaid, warnings}
+      KPI tiles (colour-coded) · role breakdown · match table · gap panels
+
+──POST /api/compare-v1 {model_content, model_format, req_content, …}──▶
+  gui.compare_v1_request ─▶ parse_sysml_v1 + compare_v1  (pipeline 8)
+    ▼ JSON: {semantic_match, model_coverage, req_coverage, role_breakdown,
+             matches (with name/context/satisfaction scores), unmatched_*,
+             graphml, mermaid, kg_graphml, model_turtle,
+             ontology_mermaid, ontology_graphml, warnings}
+      confidence decomposition table · Ontology View tab · downloads
+
 Security: server binds 127.0.0.1 only; errors → {error} JSON, never tracebacks.
+GuiState: thread-safe extractor cache (one per backend); shared across requests.
 ```
 
 ---
@@ -352,3 +385,216 @@ errors.ReqGraphError
 | new export format | method on `RequirementGraph` | — |
 | better ML | swap `model_name` (e.g. `bert-base-uncased`), retrain | same train/save/load API |
 | new cross-requirement similarity metric | `_score_fn` in `corpus.py` | `build_requirement_set_graph`, CLI/GUI unchanged |
+| new SysML v2 keyword → role | `_KEYWORD_ROLE` dict in `sysml_parser.py` | comparison engine unchanged |
+| new SysML v1 stereotype → role | `_STEREO_ROLE` / `_UML_ROLE` dicts in `sysml_v1_parser.py` | parser, KG, comparison unchanged |
+| different context scoring formula | `compare_v1()` weights in `sysml_v1_compare.py` | parser, KG export unchanged |
+| additional model input format | add a parser branch in `read_sysml_v1()` | comparison engine unchanged |
+
+---
+
+## 12. Pipeline 7 — SysML v2 comparison              [sysml_parser.py · sysml_compare.py]
+
+```
+model_text (SysML v2 textual notation)
+  ▼
+sysml_parser.parse_sysml(text)                       [sysml_parser.py]
+  │  Strip // line comments; extract doc /* … */ blocks
+  │  _DECL_RE regex: match (keyword, name) pairs across all SysML keywords
+  │  Track package nesting via brace depth
+  │  Map keyword → IREB Role:
+  │    part_def / part          → SUBJECT
+  │    action_def / action      → PROCESS
+  │    attribute_def / attribute → OBJECT
+  │    state_def / state / transition → CONDITION
+  │    port_def / port          → ACTOR
+  │    require/assume constraint → CONSTRAINT
+  │    requirement{}            → extracted to sysml_requirements list
+  ▼
+SysMLModel(elements: list[SysMLElement], sysml_requirements, packages, source_path)
+
+sysml_compare.compare(model, items, roles, threshold, similarity, …)
+  │  build_requirement_set_graph(items, threshold=0.0) → requirement elements
+  │  Per role R:
+  │    model_R  = [e.name for e in model.elements if e.role == R]
+  │    req_R    = [(ref.text, req_id) for ref in req_elements if ref.role == R]
+  │    score matrix (|model_R| × |req_R|) via lexical or embedding scorer
+  │    matched_model_R: best row score ≥ threshold
+  │    matched_req_R:   best col score ≥ threshold
+  │    role_score_R = harmonic_mean(model_cov_R, req_cov_R)
+  │  semantic_match = weighted_avg(role_score_R) by max(|model_R|,|req_R|)
+  ▼
+ComparisonReport
+  .model_coverage  .req_coverage  .semantic_match
+  .role_breakdown  .matches (MatchDetail)
+  .unmatched_model .unmatched_reqs  .warnings
+  .to_graphml()    bipartite: MODEL nodes ↔ REQ_ELEMENT nodes, MATCHES edges
+  .to_mermaid()    flowchart: element → matched requirement text
+  .to_dict()       JSON-serialisable
+```
+
+---
+
+## 13. Pipeline 8 — SysML v1 KG + context-aware comparison
+##                              [sysml_v1_parser.py · sysml_v1_compare.py]
+
+### 13a. Parsing (two formats)
+
+```
+read_sysml_v1(path)  ─▶  auto-detect by extension + content sniff
+  │  .ttl / .rdf / .n3 / .owl  or  @prefix / @base keyword  → Turtle path
+  │  .xmi / .uml / .xml        or  <?xml / <uml:             → XMI path
+  ▼
+
+XMI path  ─▶  _parse_xmi(text, source_path)
+  PASS 1: xml.etree.ElementTree walk
+    ├─ collect every element by xmi:id into elem_map {id → ET.Element}
+    ├─ record packagedElement relationships with package hierarchy
+    └─ note root-level siblings (stereotype applications)
+  PASS 2: resolve
+    ├─ stereotype applications (SysML:Block, SysML:Requirement, SysML:Satisfy…)
+    │   matched to elements via base_Class / base_Abstraction / base_Property
+    │   _is_sysml_ns() accepts any known SysML namespace URI regardless of prefix
+    ├─ Abstraction elements: client xmi:idref + supplier xmi:idref → V1Relation
+    │   rel_type from stereotype (satisfy/refine/derive/trace/allocate)
+    ├─ ownedAttribute aggregation="composite" → composition V1Relation
+    ├─ ownedComment body attribute → V1Element.doc
+    ├─ UML type + stereotype → IREB Role  (_UML_ROLE / _STEREO_ROLE tables)
+    └─ SysML:Requirement text= / id= attributes → V1Element.req_text / .req_id
+
+Turtle path  ─▶  _parse_turtle(text, source_path)   (requires rdflib≥6.0)
+  rdflib.Graph.parse(data=text, format="turtle")
+  For each subject:
+    collect rdf:type(s) → local name → Role via _TTL_TYPE_ROLE table
+    rdfs:label → name;  rdfs:comment / sysml:text → doc / req_text
+    sysml:id → req_id
+    predicate local name in RELATION_PREDS → V1Relation
+  Custom subclass support: rdfs:subClassOf chain → inherits Role from ancestor
+  element.xmi_id = URI fragment or local name (so adjacency indexing works)
+
+Both paths produce:
+  SysMLV1Model(elements: list[V1Element], relations: list[V1Relation], …)
+    .to_graphml()  full KG GraphML (MODEL_ELEMENT + REQUIREMENT nodes, typed edges)
+    .to_turtle()   canonical Turtle using sysmlkg: ontology (round-trippable)
+```
+
+### 13b. Context building and comparison
+
+```
+compare_v1(model, items, roles, threshold=0.5, context_hops=2, …)
+  │
+  │  build_requirement_set_graph(items, threshold=0.0) → req_elements
+  │
+  │  For each model element e:
+  │    _build_context(e, model, hops)        [BFS over V1Relation adjacency]
+  │      parts = [e.name, e.doc, e.req_text]
+  │      hop 1: all neighbors via any relation → append neighbor.name + .doc
+  │      hop 2: neighbors of neighbors → append their name + .doc
+  │      context_string = " ".join(non-empty parts)
+  │
+  │  For each (model element e, req element r) pair of same role:
+  │    name_score    = _score(e.name, r.text)         lexical or embedding
+  │    context_score = _score(context_string, r.text)
+  │    sat_bonus     = 1.0 if model has satisfy/refine link from e to a
+  │                    model requirement whose req_text scores ≥ 0.5 vs r.text
+  │                    else 0.0
+  │    confidence    = 0.25·name_score + 0.55·context_score + 0.20·sat_bonus
+  │
+  │  Best-match per element; matched if confidence ≥ threshold
+  │  model_coverage, req_coverage, semantic_match (F1)
+  │  ontology_diff(model, rsg) → OntologyDiff
+  ▼
+V1ComparisonReport
+  .model_coverage  .req_coverage  .semantic_match
+  .role_breakdown  .matches (V1MatchDetail: name_score, context_score,
+  .unmatched_*     confidence, context_used, hops_used, via_satisfaction)
+  .to_graphml()    bipartite + CONTEXT_HOP_1/2 edges
+  .to_mermaid()    flowchart
+  .to_dict()       JSON-serialisable (all score components exposed)
+```
+
+### 13c. Ontology diff visualisation
+
+```
+ontology_diff(model: SysMLV1Model, rsg: RequirementSetGraph) → OntologyDiff
+
+  Requirement ontology graph (from RSG):
+    Nodes = IREB role classes with instance counts
+    Edges = structural role relations (HAS_SUBJECT, HAS_PROCESS, …)
+
+  Model ontology graph (from SysMLV1Model):
+    Nodes = SysML element type+stereotype classes with instance counts
+    Edges = relation types (composition, association, satisfy, refine, …)
+
+  Mapping layer:
+    Cross-graph MAPS_TO edges: model type → req role, labelled mean confidence
+
+OntologyDiff
+  .req_ontology_nodes / _edges   .model_ontology_nodes / _edges   .mappings
+  .to_mermaid()   two LR subgraphs (reqont / modelont) + dashed MAPS_TO edges
+  .to_graphml()   combined bipartite ontology graph
+  .to_dict()      JSON-serialisable
+```
+
+---
+
+## 14. Pipeline 6a — Extended export                 [corpus.py · io_formats.py]
+
+```
+All import readers return 3-tuples: (id: str|None, text: str, meta: dict)
+  read_requirements_csv / read_requirements_excel
+    _rows_from_df: extra columns → normalised names (lower, spaces→_) → meta dict
+  read_requirements_json
+    array-of-objects, dict-keyed, or plain-string-dict shapes
+    normalised through pandas DataFrame → _rows_from_df
+  read_reqif
+    all ATTRIBUTE-VALUE-STRING nodes → meta dict (not just id/text)
+
+_normalise_items(items): yields (id, text, meta) 3-tuples
+  consumed by build_requirement_set_graph and requirements_to_dataframe
+
+requirements_to_dataframe(items, template, extractor)
+  extra meta columns injected between text and type (order: first-seen)
+  output columns: id · text · [meta…] · type · ears_pattern · condition ·
+                  subject · modality · actor · process · object · constraint ·
+                  weak_words · non_atomic · roundtrip_ok · error
+
+RequirementSetGraph new methods:
+  .to_element_graphml()
+    REQ nodes:     node_type=REQ, text, quality attrs, metadata JSON
+    ELEMENT nodes: node_type=ELEMENT, role, text  (id = req_id__node_id)
+    HAS_ELEMENT edges:   REQ → each of its ELEMENT nodes
+    SIMILAR_* edges:     ELEMENT ↔ ELEMENT across requirements (from connections)
+    visualisable in Gephi / yEd / Cytoscape as a full semantic knowledge graph
+
+  .to_req_turtle()
+    Serialises requirement set as RDF ontology (reqont: namespace)
+    :R1 a reqont:Requirement ; reqont:id "R1" ; reqont:text "…" .
+    :R1_subject a reqont:Subject ; rdfs:label "vehicle" ; reqont:fromRequirement :R1 .
+    Cross-req similarity: :R1_subject reqont:similarTo :R2_subject .
+    Output is rdflib-parseable and loadable into a triplestore alongside model TTL
+```
+
+---
+
+## 15. Module inventory (complete)
+
+| Module | Layer | Key public API |
+|---|---|---|
+| `core.py` | Model | `Role`, `Rel`, `Node`, `Edge`, `RequirementGraph` |
+| `errors.py` | Model | `ReqGraphError` hierarchy |
+| `templates.py` | Engine | `Template`, `RUPP_TEMPLATE`, `EARS_TEMPLATE`, `register_template` |
+| `tiling.py` | Engine | `tile_to_graph` |
+| `extractors.py` | Extraction | `RuleExtractor`, `SpacyExtractor`, `BertTaggerExtractor`, `get_extractor` |
+| `parser.py` | Service | `RequirementParser`, `build_requirement`, `split_requirements` |
+| `nlp.py` | Service | `BertTokenTagger`, `RequirementAnalyzer` |
+| `quality.py` | Service | `enrich`, `check_quality`, `classify_type`, `classify_ears` |
+| `io_formats.py` | I/O | `read_requirements_csv/excel/json`, `read_reqif`, `write_reqif`, `requirements_to_dataframe` |
+| `corpus.py` | Service | `build_requirement_set_graph`, `RequirementSetGraph` |
+| `seed_data.py` | Data | 30-requirement aerospace seed corpus |
+| `sysml_parser.py` | Comparison | `SysMLElement`, `SysMLModel`, `parse_sysml`, `read_sysml` |
+| `sysml_compare.py` | Comparison | `MatchDetail`, `ComparisonReport`, `compare` |
+| `sysml_v1_parser.py` | Comparison | `V1Element`, `V1Relation`, `SysMLV1Model`, `parse_sysml_v1`, `read_sysml_v1` |
+| `sysml_v1_compare.py` | Comparison | `V1MatchDetail`, `V1ComparisonReport`, `OntologyDiff`, `compare_v1`, `ontology_diff` |
+| `__main__.py` | Application | CLI subcommands |
+| `gui.py` | Application | HTTP server, 5 request handlers |
+| `static/index.html` | Application | Single-page GUI (no CDN, offline-capable) |
