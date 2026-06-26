@@ -498,8 +498,16 @@ def cmd_compare_v1(args):
     for w in report.warnings:
         print(f"warning: {w}", file=sys.stderr)
 
+    # Certification traceability matrix (RVTM)
+    from .traceability import build_traceability_matrix
+    tm = build_traceability_matrix(model, items, report, template=template,
+                                   extractor=ex, roles=roles,
+                                   candidate_threshold=threshold)
+
     if args.format == "json":
-        print(json.dumps(report.to_dict(), indent=2))
+        out = report.to_dict()
+        out["traceability"] = tm.to_dict()
+        print(json.dumps(out, indent=2))
     else:
         def pct(v):
             return f"{v:.1%}"
@@ -536,6 +544,27 @@ def cmd_compare_v1(args):
             for req_id, role_val, txt in report.unmatched_reqs[:10]:
                 print(f"  {req_id}  [{role_val}]  {txt!r}")
 
+        # Certification traceability summary
+        print(f"\nCertification traceability (RVTM):")
+        print(f"  Auditable trace rate:   {pct(tm.explicit_trace_rate())}"
+              f"  ({tm.n_verified}/{tm.n_requirements} via explicit model links)")
+        print(f"  Verified / Candidate / Gap: "
+              f"{tm.n_verified} / {tm.n_candidate} / {tm.n_gap}")
+        print(f"  Quality-passing:        {tm.n_quality_pass}/{tm.n_requirements}")
+        print(f"  Verification readiness: {pct(tm.verification_readiness())}"
+              f"  (traced AND quality-passing)")
+        if tm.findings:
+            high = sum(1 for f in tm.findings if f.severity == "high")
+            print(f"  Findings: {len(tm.findings)} ({high} high)")
+            for f in [f for f in tm.findings if f.severity == "high"][:8]:
+                print(f"    [{f.finding_id}] {f.subject}: {f.issue}")
+
+    if args.rvtm:
+        Path(args.rvtm).write_text(tm.to_csv(), encoding="utf-8")
+        print(f"\nRVTM (CSV) -> {args.rvtm}")
+    if args.rvtm_graphml:
+        Path(args.rvtm_graphml).write_text(tm.to_graphml(), encoding="utf-8")
+        print(f"RVTM graphml -> {args.rvtm_graphml}")
     if args.report:
         Path(args.report).write_text(
             json.dumps(report.to_dict(), indent=2), encoding="utf-8")
@@ -702,6 +731,11 @@ def main(argv=None):
                       help="write round-tripped model Turtle to this file")
     pcv1.add_argument("--ontology-graphml", metavar="PATH", default=None,
                       help="write ontology-diff GraphML to this file")
+    pcv1.add_argument("--rvtm", metavar="PATH", default=None,
+                      help="write the Requirements Verification & Traceability "
+                           "Matrix (RVTM) to this CSV file")
+    pcv1.add_argument("--rvtm-graphml", metavar="PATH", default=None,
+                      help="write the RVTM traceability graph to this GraphML file")
     pcv1.add_argument("--template", default="IREB-Rupp")
     pcv1.add_argument("--backend",  default="rules", choices=["rules", "spacy", "bert"])
     pcv1.add_argument("--model",    default=None)

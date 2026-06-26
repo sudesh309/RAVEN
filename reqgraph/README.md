@@ -606,9 +606,54 @@ Extra outputs unique to `compare-v1`:
   structure of the requirements against the SysML element-type structure of the
   model, with `MAPS_TO` edges weighted by mean confidence. The GUI renders the
   same diff as a Mermaid view.
+* **`--rvtm`** — the **Requirements Verification & Traceability Matrix** as CSV
+  (see below). **`--rvtm-graphml`** writes the same matrix as a traceability graph.
 
 Both commands are also available in the GUI as dedicated "Compare … vs
 Requirements" cards (`/api/compare`, `/api/compare-v1`).
+
+### Certification traceability (RVTM)
+
+A semantic-match percentage is not a certification artifact. `compare-v1` also
+produces a **Requirements Verification & Traceability Matrix** — the deliverable
+an architect signs off — that answers, per requirement:
+
+| Column | Meaning |
+|---|---|
+| **Allocated element(s)** | the design element(s) that satisfy the requirement |
+| **Trace status** | **Verified** = an *auditable* model link exists (exact requirement-id match + a `satisfy`/`derive`/`refine`/`allocate` relation); **Candidate** = only an *inferred* semantic match, needs sign-off; **Gap** = no allocation |
+| **Verification method** | suggested IADT method — **T**est / **A**nalysis / **I**nspection / **D**emonstration — from the requirement wording (overridable) |
+| **Quality** | pass/fail against verifiability criteria (atomic, unambiguous, has a modality) |
+
+Readiness rollups: **explicit trace rate** (fraction with an auditable link),
+**trace completeness** (verified + candidate), and **verification readiness**
+(traced *and* quality-passing). Gaps, candidate-only traces, quality failures
+and orphan design elements (no driving requirement) are emitted as numbered
+**findings** with severities.
+
+The distinction that matters for certification: **Verified** is keyed on an
+exact requirement-ID match plus an explicit model link, so a fuzzy text
+resemblance can never be reported as auditable.
+
+```bash
+python -m reqgraph compare-v1 model.ttl reqs.reqif --rvtm RVTM.csv
+```
+
+```python
+from reqgraph import read_sysml_v1, compare_v1, build_traceability_matrix
+model  = read_sysml_v1("model.ttl")
+items  = [("SYS-001", "The brake system shall decelerate at 5 m/s2."), ...]
+report = compare_v1(model, items, threshold=0.3)
+rvtm   = build_traceability_matrix(model, items, report)
+print(rvtm.explicit_trace_rate(), rvtm.n_verified, rvtm.n_gap)
+open("RVTM.csv", "w").write(rvtm.to_csv())
+```
+
+In the GUI's **Compare SysML v1** card, the RVTM appears as a *Certification
+traceability* panel with readiness tiles, the matrix, findings, and CSV /
+Markdown / GraphML downloads. The card's **Load worked example** button fills
+both panels with a small model + requirement set that exercises all three trace
+states.
 
 ## GUI
 
@@ -716,6 +761,8 @@ reqgraph/
   sysml_compare.py   SysML v2 ↔ requirements comparison (compare)
   sysml_v1_parser.py   SysML v1 XMI + Turtle/RDF parser → knowledge graph
   sysml_v1_compare.py  context-aware SysML v1 comparison + ontology diff (compare-v1)
+  traceability.py    Requirements Verification & Traceability Matrix (RVTM) —
+                     verified/candidate/gap traces, IADT verification method, findings
 tests/           pytest suite (lossless round-trip is the headline invariant)
 ```
 

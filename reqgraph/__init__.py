@@ -39,6 +39,9 @@ from .sysml_v1_parser import (V1Element, V1Relation, SysMLV1Model,
                                parse_sysml_v1, read_sysml_v1)
 from .sysml_v1_compare import (V1MatchDetail, V1ComparisonReport, OntologyDiff,
                                 compare_v1, ontology_diff)
+from .traceability import (VerificationMethod, TraceStatus, Allocation,
+                            TraceItem, Finding, TraceabilityMatrix,
+                            build_traceability_matrix, assign_verification_method)
 
 # library logging etiquette: emit nothing unless the application configures it
 _logging.getLogger(__name__).addHandler(_logging.NullHandler())
@@ -55,6 +58,8 @@ __all__ = [
     "ComparisonReport", "MatchDetail", "compare_sysml",
     "V1Element", "V1Relation", "SysMLV1Model", "parse_sysml_v1", "read_sysml_v1",
     "V1MatchDetail", "V1ComparisonReport", "OntologyDiff", "compare_v1", "ontology_diff",
+    "VerificationMethod", "TraceStatus", "Allocation", "TraceItem", "Finding",
+    "TraceabilityMatrix", "build_traceability_matrix", "assign_verification_method",
     "ReqGraphError", "GraphIntegrityError", "ExtractionError",
     "TemplateError", "DataFormatError", "ModelError",
 ]

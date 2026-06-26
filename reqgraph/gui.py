@@ -656,6 +656,17 @@ def compare_v1_request(state: GuiState, payload: dict) -> dict:
     if report.ontology_diff:
         result["ontology_mermaid"] = report.ontology_diff.to_mermaid()
         result["ontology_graphml"] = report.ontology_diff.to_graphml()
+
+    # Certification traceability matrix (RVTM): the architect's deliverable.
+    from .traceability import build_traceability_matrix
+    tm = build_traceability_matrix(
+        model, items, report, template=template,
+        extractor=state.extractor(backend), roles=roles,
+        candidate_threshold=threshold)
+    result["traceability"] = tm.to_dict()
+    result["rvtm_csv"] = tm.to_csv()
+    result["rvtm_graphml"] = tm.to_graphml()
+    result["rvtm_markdown"] = tm.to_markdown()
     return result
 
 
