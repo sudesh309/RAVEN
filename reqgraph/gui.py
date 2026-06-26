@@ -337,6 +337,61 @@ def parse_request(state: GuiState, payload: dict) -> dict:
     return out
 
 
+def _entity_graph(rsg) -> dict:
+    """Build an element-level (subject/object) graph for force-directed display.
+
+    Nodes are the individual SUBJECT and OBJECT phrases extracted from every
+    requirement (the *entities* a requirement set talks about). Edges are the
+    cross-requirement similarity links between two phrases that share the same
+    role. Phrases that never link still appear as nodes, so the picture shows
+    both the shared vocabulary and the isolated terms.
+
+    Returns ``{"nodes": [...], "edges": [...]}`` — a stable shape the browser
+    renders with its force simulation. Node ``id`` is ``"{req}\\u241f{role}\\u241f{text}"``
+    so an edge can be keyed back to the exact phrase it connects.
+    """
+    SEP = "␟"  # symbol-for-unit-separator: unlikely to occur in a phrase
+
+    def _key(req_id, role, text):
+        return f"{req_id}{SEP}{role}{SEP}{text.strip()}"
+
+    nodes: dict[str, dict] = {}
+    degree: dict[str, int] = {}
+    for rid in rsg.req_ids:
+        g = rsg.graphs[rid]
+        for n in g.elements():
+            role = n.role.value
+            if role not in ("SUBJECT", "OBJECT"):
+                continue
+            text = n.text.strip()
+            if not text:
+                continue
+            k = _key(rid, role, text)
+            if k not in nodes:
+                nodes[k] = {"id": k, "label": text, "role": role, "req": rid}
+                degree[k] = 0
+
+    edges = []
+    for c in rsg._dedup_pairs():
+        role = c.role.value
+        if role not in ("SUBJECT", "OBJECT"):
+            continue
+        s = _key(c.a.req_id, role, c.a.text)
+        t = _key(c.b.req_id, role, c.b.text)
+        # both endpoints must be known phrase nodes
+        if s not in nodes or t not in nodes or s == t:
+            continue
+        edges.append({"source": s, "target": t, "role": role,
+                      "score": round(c.score, 4)})
+        degree[s] = degree.get(s, 0) + 1
+        degree[t] = degree.get(t, 0) + 1
+
+    for k, node in nodes.items():
+        node["degree"] = degree.get(k, 0)
+
+    return {"nodes": list(nodes.values()), "edges": edges}
+
+
 def connections_request(state: GuiState, payload: dict) -> dict:
     """Handle one /api/connections payload: a requirement *set* in, a
     per-requirement breakdown plus the cross-requirement SUBJECT/OBJECT
@@ -357,6 +412,7 @@ def connections_request(state: GuiState, payload: dict) -> dict:
              "score": round(c.score, 4), "text_a": c.a.text, "text_b": c.b.text}
             for c in rsg._dedup_pairs()
         ],
+        "entities": _entity_graph(rsg),
         "n_requirements": len(rsg.req_ids),
         "n_connections": len(rsg.connections),
         "mermaid": rsg.to_mermaid(),
@@ -440,6 +496,7 @@ def export_request(state: GuiState, payload: dict) -> dict:
              "score": round(c.score, 4), "text_a": c.a.text, "text_b": c.b.text}
             for c in rsg._dedup_pairs()
         ],
+        "entities": _entity_graph(rsg),
         "n_requirements": len(rsg.req_ids),
         "n_connections": len(rsg.connections),
         "mermaid": rsg.to_mermaid(),

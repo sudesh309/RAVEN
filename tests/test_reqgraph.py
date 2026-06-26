@@ -561,6 +561,44 @@ def test_gui_connections_request_rejects_empty():
         connections_request(GuiState(), {"texts": ["   ", ""]})
 
 
+def test_gui_connections_entity_graph_shape():
+    """The /api/connections response carries an element-level (subject/object)
+    graph the browser renders with its force simulation."""
+    from reqgraph.gui import GuiState, connections_request
+    texts = [
+        "The flight management system shall calculate the optimal cruise altitude.",
+        "The flight management system shall log every altitude change.",
+        "The pilot shall be able to override the calculated cruise altitude.",
+    ]
+    d = connections_request(GuiState(), {"texts": texts, "threshold": 0.3})
+    ents = d["entities"]
+    assert set(ents) == {"nodes", "edges"}
+    assert ents["nodes"], "expected subject/object entity nodes"
+    # every node is a subject or object phrase with a stable id and degree
+    for n in ents["nodes"]:
+        assert n["role"] in ("SUBJECT", "OBJECT")
+        assert n["id"] and n["label"] and "req" in n and "degree" in n
+    # edges reference existing node ids and only link same-role phrases
+    ids = {n["id"] for n in ents["nodes"]}
+    for e in ents["edges"]:
+        assert e["source"] in ids and e["target"] in ids
+        assert e["role"] in ("SUBJECT", "OBJECT")
+        assert 0.0 <= e["score"] <= 1.0
+    # the two FMS subjects are identical text → must be linked
+    assert any(e["role"] == "SUBJECT" for e in ents["edges"])
+
+
+def test_gui_export_includes_entity_graph():
+    from reqgraph.gui import GuiState, export_request
+    csv = ("id,text\n"
+           "R1,The system shall log every error.\n"
+           "R2,The system shall record every fault.\n")
+    d = export_request(GuiState(), {"format": "csv", "content": csv,
+                                    "threshold": 0.3})
+    assert "entities" in d and "nodes" in d["entities"]
+    assert all(n["role"] in ("SUBJECT", "OBJECT") for n in d["entities"]["nodes"])
+
+
 def test_gui_server_smoke():
     import json as _json
     import threading

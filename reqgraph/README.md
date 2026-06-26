@@ -678,13 +678,36 @@ The page also includes:
 * an amber **compound-requirement warning** with per-requirement tabs when a
   single input contains several "shall" clauses;
 * a **"Requirement set — find connections"** panel: paste a requirement set
-  (one per line) and see a network graph connecting requirements that share
-  similar SUBJECT/OBJECT elements, with the same knowledge-graph export
+  (one per line) and see the SUBJECT/OBJECT entities rendered in an interactive
+  **force-directed graph** (see below), with the same knowledge-graph export
   buttons.
 * an **"Import & analyze"** panel: upload a CSV / Excel / JSON / ReqIF file (or
   paste raw text), and get the per-requirement quality table (auto-discovering
-  any extra metadata columns), the cross-requirement connections network, and
+  any extra metadata columns), the same force-directed entity graph, and
   one-click downloads of the CSV, JSON, and consolidated element-level GraphML.
+
+**Every section loads a worked example on first paint** — the parser, the
+connection finder, the import pipeline, and both SysML-comparison cards all show
+live output the moment the page opens, so nothing starts blank.
+
+### Force-directed entity graph (subjects & objects)
+
+The connection and import panels visualise the requirement set as a live
+**force-directed graph** of the actual SUBJECT and OBJECT phrases — not just
+boxes per requirement. It is a dependency-free, offline SVG renderer (no CDN,
+no D3) with a real physics simulation: charge repulsion, link springs, and
+centering gravity settle the layout, then it auto-frames to fit.
+
+* nodes are the subject (blue) and object (green) phrases; node size grows with
+  the number of similarity links;
+* edges connect same-role phrases that score above the threshold, with
+  thickness scaled by similarity;
+* **drag** a node to pin it (drop to keep, click to release, double-click to
+  unpin), **scroll** to zoom toward the cursor, **drag the canvas** to pan, and
+  use the **+ / − / fit** toolbar; hovering a node highlights its neighbours.
+
+The same `{nodes, edges}` data is available programmatically in the
+`/api/connections` and `/api/export` responses under the `entities` key.
 
 ## Knowledge graph export
 
