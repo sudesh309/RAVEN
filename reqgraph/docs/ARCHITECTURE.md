@@ -595,6 +595,7 @@ RequirementSetGraph new methods:
 | `sysml_compare.py` | Comparison | `MatchDetail`, `ComparisonReport`, `compare` |
 | `sysml_v1_parser.py` | Comparison | `V1Element`, `V1Relation`, `SysMLV1Model`, `parse_sysml_v1`, `read_sysml_v1` |
 | `sysml_v1_compare.py` | Comparison | `V1MatchDetail`, `V1ComparisonReport`, `OntologyDiff`, `compare_v1`, `ontology_diff` |
+| `traceability.py` | Comparison | `TraceabilityMatrix`, `TraceItem`, `Finding`, `VerificationMethod`, `TraceStatus`, `build_traceability_matrix` — the RVTM: verified (auditable model link) vs candidate (semantic) vs gap, IADT verification method, certification findings |
 | `__main__.py` | Application | CLI subcommands |
 | `gui.py` | Application | HTTP server, 5 request handlers |
 | `static/index.html` | Application | Single-page GUI (no CDN, offline-capable) |

@@ -223,6 +223,20 @@
     margin-top:auto;line-height:1.45}
   .lane .out b{color:var(--ok)}
   .story-foot{font-size:12.5px;color:var(--muted);margin:14px 0 0;line-height:1.55}
+  /* RVTM trace-status badges + verification-method chips */
+  .ts{font-size:11px;font-weight:600;padding:2px 9px;border-radius:99px;
+    border:1px solid;white-space:nowrap}
+  .ts-v{background:var(--ok-soft);color:var(--ok);border-color:#bfe6d8}
+  .ts-c{background:#FBF3E2;color:#7A5A12;border-color:#ECD9A6}
+  .ts-g{background:var(--bad-soft);color:var(--bad);border-color:#f0c0c0}
+  .vm{font-size:11px;padding:2px 8px;border-radius:6px;background:var(--accent-soft);
+    color:var(--accent);border:1px solid #d9d6f5}
+  .qg-pass{color:var(--ok);font-weight:600} .qg-fail{color:var(--bad);font-weight:600}
+  .find-sev{font-size:10px;font-weight:700;padding:1px 7px;border-radius:99px;
+    margin-right:6px;text-transform:uppercase}
+  .find-high{background:var(--bad-soft);color:var(--bad)}
+  .find-medium{background:#FBF3E2;color:#7A5A12}
+  .find-low{background:var(--accent-soft);color:var(--accent)}
 </style>
 </head>
 <body>
@@ -765,6 +779,8 @@
         <label><input type="checkbox" class="v1-role" value="OBJECT"    checked> Object</label>
         <label><input type="checkbox" class="v1-role" value="CONDITION" checked> Condition</label>
       </fieldset>
+      <button class="ghost" id="v1-example" style="align-self:flex-end"
+        title="Fill both panels with a small worked example and run it">Load worked example</button>
       <button class="primary" id="v1-btn" style="align-self:flex-end">Compare v1 &rarr;</button>
     </div>
 
@@ -788,6 +804,43 @@
     <h2>SysML v1 Comparison Results</h2>
     <div class="cmp-section-head">Summary</div>
     <div class="kpis" id="v1-kpis" style="margin-bottom:16px"></div>
+
+    <!-- ── Certification Traceability Matrix (RVTM) ─────────────────────── -->
+    <div class="cmp-section-head">Certification traceability (RVTM)
+      <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--muted)">
+        — the deliverable an architect signs off</span></div>
+    <p class="lead" style="margin-top:0">Per requirement: which design element is
+      allocated, whether the trace is an <b>auditable model link</b>
+      (<span class="ts ts-v">Verified</span>) or only an <b>inferred semantic
+      match</b> needing sign-off (<span class="ts ts-c">Candidate</span>) or
+      missing entirely (<span class="ts ts-g">Gap</span>), plus the suggested
+      verification method (Test / Analysis / Inspection / Demonstration) and a
+      requirement quality gate.</p>
+    <div class="kpis" id="v1-rvtm-kpis" style="margin-bottom:12px"></div>
+    <div class="row-head" style="margin-bottom:8px">
+      <span class="grp" style="font-size:10.5px;letter-spacing:.04em;
+        text-transform:uppercase;color:var(--muted)">download</span>
+      <div class="exports" style="margin-left:8px">
+        <button class="ghost" onclick="dlV1('rvtm_csv')"
+          title="Canonical RVTM spreadsheet">RVTM CSV</button>
+        <button class="ghost" onclick="dlV1('rvtm_markdown')">RVTM Markdown</button>
+        <button class="ghost" onclick="dlV1('rvtm_graphml')">RVTM GraphML</button>
+      </div>
+    </div>
+    <div style="overflow-x:auto;margin-bottom:12px">
+      <table style="font-size:.86rem">
+        <thead><tr>
+          <th>Req ID</th><th>Requirement</th><th>Allocated element</th>
+          <th style="width:90px">Trace</th><th style="width:108px">Verify</th>
+          <th style="width:74px">Quality</th>
+        </tr></thead>
+        <tbody id="v1-rvtm-body"></tbody>
+      </table>
+    </div>
+    <details class="paramhelp" style="margin-bottom:16px">
+      <summary id="v1-findings-sum">Findings</summary>
+      <ul id="v1-rvtm-findings" style="margin:6px 0 0;padding-left:20px"></ul>
+    </details>
 
     <div class="cmp-section-head">Role Breakdown</div>
     <div style="overflow-x:auto;margin-bottom:16px">
@@ -1628,8 +1681,43 @@ function v1SetFmt(fmt) {
   }
 }
 
+// A small self-contained worked example: a Turtle model with one auditable
+// satisfy link, plus ID-bearing requirements that exercise all three trace
+// states — Verified (SYS-001), Candidate (SYS-002), Gap (SYS-003).
+const V1_EXAMPLE_TTL = `@prefix sysmlkg: <http://reqgraph.io/sysml/> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix : <http://example.org/uav#> .
+
+:BrakeSystem a sysmlkg:Block ; rdfs:label "BrakeSystem" ;
+    rdfs:comment "Decelerates the vehicle" ;
+    sysmlkg:hasProperty :pressure ;
+    sysmlkg:satisfies :R_SYS001 .
+:pressure a sysmlkg:ValueProperty ; rdfs:label "pressure" .
+:ApplyBrakes a sysmlkg:ActionDefinition ; rdfs:label "ApplyBrakes" ;
+    rdfs:comment "Commands the brake actuators" .
+:SpeedSensor a sysmlkg:Block ; rdfs:label "SpeedSensor" ;
+    rdfs:comment "Measures wheel speed continuously" .
+
+:R_SYS001 a sysmlkg:Requirement ; sysmlkg:requirementId "SYS-001" ;
+    sysmlkg:requirementText "The brake system shall decelerate the vehicle at 5 m/s2." .`;
+
+const V1_EXAMPLE_REQS = `id,text
+SYS-001,The brake system shall decelerate the vehicle at 5 m/s2 within 200 ms.
+SYS-002,The speed sensor shall measure wheel speed continuously.
+SYS-003,The system shall log every detected fault to the maintenance recorder.`;
+
+function v1LoadExample() {
+  v1SetFmt("turtle");
+  $("v1-model").value = V1_EXAMPLE_TTL;
+  $("v1-reqs").value = V1_EXAMPLE_REQS;
+  $("v1-req-format").value = "csv";
+  $("v1-thr").value = "0.3"; $("v1-thr").dispatchEvent(new Event("input"));
+  parseCompareV1();
+}
+
 function bootCompareV1() {
   $("v1-btn").onclick = parseCompareV1;
+  $("v1-example").onclick = v1LoadExample;
 }
 
 async function parseCompareV1() {
@@ -1734,10 +1822,54 @@ function renderCompareV1Results(d) {
         `<li>${esc(r.req_id)} [${esc(r.role)}] ${esc(r.text.length>60?r.text.slice(0,57)+"…":r.text)}</li>`
       ).join("")}</ul>`;
 
+  // Certification traceability matrix (RVTM) — the headline deliverable
+  renderV1Rvtm(d.traceability);
+
   // Ontology view (readable, built from ontology_diff)
   renderV1Ontology(d.ontology_diff);
 
   $("v1cmpcard").hidden = false;
+}
+
+const V1_TS = {Verified:"ts-v", Candidate:"ts-c", Gap:"ts-g"};
+function renderV1Rvtm(tm){
+  if(!tm){ $("v1-rvtm-kpis").innerHTML=""; $("v1-rvtm-body").innerHTML=""; return; }
+  const rdy = v1Pct(tm.verification_readiness);
+  $("v1-rvtm-kpis").innerHTML =
+    kpiCard(v1Pct(tm.explicit_trace_rate), "Auditable traces",
+            tm.n_verified+" of "+tm.n_requirements+" via model links",
+            tm.explicit_trace_rate>=0.8?"good":(tm.explicit_trace_rate<0.5?"bad":"")) +
+    kpiCard(tm.n_verified, "Verified", "explicit satisfy / derive", "good") +
+    kpiCard(tm.n_candidate, "Candidate", "semantic — needs sign-off", "") +
+    kpiCard(tm.n_gap, "Gaps", "no allocation", tm.n_gap?"bad":"good") +
+    kpiCard(rdy, "Verification readiness", "traced AND quality-passing",
+            tm.verification_readiness>=0.8?"good":(tm.verification_readiness<0.5?"bad":""));
+  const items = tm.items || [];
+  $("v1-rvtm-body").innerHTML = items.map(it => {
+    const alloc = (it.allocations||[]).map(a =>
+      `${esc(a.element)}<span style="color:var(--muted);font-size:11px">${a.explicit?"":" ~"+(a.confidence*100).toFixed(0)+"%"}</span>`
+    ).join(", ") || `<span style="color:var(--muted)">—</span>`;
+    const reqTxt = it.req_text.length>64 ? it.req_text.slice(0,61)+"…" : it.req_text;
+    const qg = it.quality_pass
+      ? '<span class="qg-pass">PASS</span>'
+      : `<span class="qg-fail" title="${esc((it.quality_issues||[]).join('; '))}">FAIL</span>`;
+    return `<tr>
+      <td style="white-space:nowrap"><b>${esc(it.req_id)}</b></td>
+      <td title="${esc(it.req_text)}">${esc(reqTxt)}</td>
+      <td>${alloc}</td>
+      <td><span class="ts ${V1_TS[it.trace_status]||''}" title="${esc(it.rationale)}">${esc(it.trace_status)}</span></td>
+      <td><span class="vm">${esc(it.verification_method)}</span></td>
+      <td style="text-align:center">${qg}</td>
+    </tr>`;
+  }).join("");
+  const finds = tm.findings || [];
+  $("v1-findings-sum").textContent = `Findings (${finds.length})`;
+  $("v1-rvtm-findings").innerHTML = finds.length
+    ? finds.map(f =>
+        `<li style="margin-bottom:4px"><span class="find-sev find-${f.severity}">${esc(f.severity)}</span>
+         <b>${esc(f.id)}</b> <span style="color:var(--muted)">[${esc(f.category)}]</span>
+         ${esc(f.subject)} — ${esc(f.issue)}</li>`).join("")
+    : '<li style="color:var(--ok);list-style:none;margin-left:-20px">✓ no findings — every requirement is traced and verifiable</li>';
 }
 
 function ontChip(label, count){
@@ -1789,6 +1921,12 @@ function dlV1(kind) {
     content = v1Last.mermaid || ""; name = "v1_compare"; ext = "md";
   } else if (kind === "ontology_graphml") {
     content = v1Last.ontology_graphml || ""; name = "v1_ontology"; ext = "graphml";
+  } else if (kind === "rvtm_csv") {
+    content = v1Last.rvtm_csv || ""; name = "RVTM"; ext = "csv";
+  } else if (kind === "rvtm_markdown") {
+    content = v1Last.rvtm_markdown || ""; name = "RVTM"; ext = "md";
+  } else if (kind === "rvtm_graphml") {
+    content = v1Last.rvtm_graphml || ""; name = "RVTM_traceability"; ext = "graphml";
   }
   if (!content) { alert("No content for " + kind); return; }
   const a = document.createElement("a");
