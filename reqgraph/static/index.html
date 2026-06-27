@@ -550,6 +550,13 @@
             <option value="json">JSON</option>
             <option value="reqif">ReqIF (XML)</option>
           </select></div>
+        <div class="ctl"><label for="exp-example">Example</label>
+          <select id="exp-example" title="load a worked example for any format">
+            <option value="csv">CSV — with rationale column</option>
+            <option value="lines">Plain text — one per line</option>
+            <option value="json">JSON — array of objects</option>
+            <option value="reqif">ReqIF — XML interchange</option>
+          </select></div>
       </div>
       <textarea id="exp-text" spellcheck="false" style="min-height:130px"
         placeholder="Paste one requirement per line, e.g.&#10;The system shall log every error to the audit trail.&#10;The operator shall be able to acknowledge an alarm within 2 seconds."></textarea>
@@ -698,6 +705,8 @@
           <label style="font-size:13px;display:flex;gap:5px;align-items:center;text-transform:none;font-weight:400"><input type="checkbox" id="cmp-role-condition" checked> CONDITION</label>
         </div>
       </div>
+      <button class="ghost" id="cmp-example" style="align-self:flex-end"
+        title="Fill both panels with a worked example and run it">Load example</button>
       <button class="primary" id="cmp-btn" style="align-self:flex-end">Compare &rarr;</button>
     </div>
     <details class="paramhelp">
@@ -1604,14 +1613,59 @@ function expPlaceholder(){
   $("exp-text").placeholder = EXP_PLACEHOLDERS[$("exp-format").value] || "";
 }
 
-// A default CSV example so the section demonstrates itself on load — extra
-// columns (rationale) are detected and carried through every download.
-const EXP_EXAMPLE_CSV = `id,text,rationale
+// A worked example for every import format. Each demonstrates the same small
+// requirement set so the cross-requirement connections are identical across
+// formats; extra columns (rationale) are detected and carried through downloads.
+const EXP_EXAMPLES = {
+  csv: `id,text,rationale
 R1,The flight management system shall calculate the optimal cruise altitude.,fuel economy
 R2,The flight management system shall log every altitude change to the maintenance recorder.,traceability
 R3,The pilot shall be able to override the calculated cruise altitude.,human authority
 R4,The navigation system shall calculate the optimal route to the destination.,fuel economy
-R5,The system should be fast and user-friendly.,vague on purpose`;
+R5,The system should be fast and user-friendly.,vague on purpose`,
+  lines: `The flight management system shall calculate the optimal cruise altitude.
+The flight management system shall log every altitude change to the maintenance recorder.
+The pilot shall be able to override the calculated cruise altitude.
+The navigation system shall calculate the optimal route to the destination.`,
+  json: `[
+  {"id": "R1", "text": "The flight management system shall calculate the optimal cruise altitude.", "rationale": "fuel economy"},
+  {"id": "R2", "text": "The pilot shall be able to override the calculated cruise altitude.", "rationale": "human authority"},
+  {"id": "R3", "text": "The navigation system shall calculate the optimal route to the destination.", "rationale": "fuel economy"}
+]`,
+  reqif: `<?xml version="1.0" encoding="UTF-8"?>
+<REQ-IF xmlns="http://www.omg.org/spec/ReqIF/20110401/reqif.xsd">
+  <CORE-CONTENT><REQ-IF-CONTENT>
+    <SPEC-TYPES><SPEC-OBJECT-TYPE IDENTIFIER="ST-REQ" LONG-NAME="Requirement">
+      <SPEC-ATTRIBUTES>
+        <ATTRIBUTE-DEFINITION-STRING IDENTIFIER="AD-ID" LONG-NAME="ReqID"/>
+        <ATTRIBUTE-DEFINITION-STRING IDENTIFIER="AD-TEXT" LONG-NAME="ReqText"/>
+        <ATTRIBUTE-DEFINITION-STRING IDENTIFIER="AD-RAT" LONG-NAME="Rationale"/>
+      </SPEC-ATTRIBUTES>
+    </SPEC-OBJECT-TYPE></SPEC-TYPES>
+    <SPEC-OBJECTS>
+      <SPEC-OBJECT IDENTIFIER="OBJ-1"><VALUES>
+        <ATTRIBUTE-VALUE-STRING THE-VALUE="R1"><DEFINITION><ATTRIBUTE-DEFINITION-STRING-REF>AD-ID</ATTRIBUTE-DEFINITION-STRING-REF></DEFINITION></ATTRIBUTE-VALUE-STRING>
+        <ATTRIBUTE-VALUE-STRING THE-VALUE="The flight management system shall calculate the optimal cruise altitude."><DEFINITION><ATTRIBUTE-DEFINITION-STRING-REF>AD-TEXT</ATTRIBUTE-DEFINITION-STRING-REF></DEFINITION></ATTRIBUTE-VALUE-STRING>
+        <ATTRIBUTE-VALUE-STRING THE-VALUE="fuel economy"><DEFINITION><ATTRIBUTE-DEFINITION-STRING-REF>AD-RAT</ATTRIBUTE-DEFINITION-STRING-REF></DEFINITION></ATTRIBUTE-VALUE-STRING>
+      </VALUES></SPEC-OBJECT>
+      <SPEC-OBJECT IDENTIFIER="OBJ-2"><VALUES>
+        <ATTRIBUTE-VALUE-STRING THE-VALUE="R2"><DEFINITION><ATTRIBUTE-DEFINITION-STRING-REF>AD-ID</ATTRIBUTE-DEFINITION-STRING-REF></DEFINITION></ATTRIBUTE-VALUE-STRING>
+        <ATTRIBUTE-VALUE-STRING THE-VALUE="The pilot shall be able to override the calculated cruise altitude."><DEFINITION><ATTRIBUTE-DEFINITION-STRING-REF>AD-TEXT</ATTRIBUTE-DEFINITION-STRING-REF></DEFINITION></ATTRIBUTE-VALUE-STRING>
+        <ATTRIBUTE-VALUE-STRING THE-VALUE="human authority"><DEFINITION><ATTRIBUTE-DEFINITION-STRING-REF>AD-RAT</ATTRIBUTE-DEFINITION-STRING-REF></DEFINITION></ATTRIBUTE-VALUE-STRING>
+      </VALUES></SPEC-OBJECT>
+    </SPEC-OBJECTS>
+  </REQ-IF-CONTENT></CORE-CONTENT>
+</REQ-IF>`,
+};
+
+function expLoadExample(fmt){
+  fmt = fmt || "csv";
+  expTab("paste");
+  $("exp-format").value = fmt;
+  expPlaceholder();
+  $("exp-text").value = EXP_EXAMPLES[fmt] || EXP_EXAMPLES.csv;
+  parseExport();
+}
 
 function bootExport(){
   $("exp-btn").onclick = parseExport;
@@ -1621,7 +1675,8 @@ function bootExport(){
   $("exp-file").addEventListener("change", () => {
     if($("exp-file").files.length) parseExport();
   });
-  $("exp-text").value = EXP_EXAMPLE_CSV;     // load a worked example…
+  $("exp-example").onchange = () => expLoadExample($("exp-example").value);
+  $("exp-text").value = EXP_EXAMPLES.csv;    // load a worked example…
   $("exp-threshold").value = "0.3";
   $("exp-thr-val").textContent = "0.30";
   // …analyzed from boot() once the selectors are populated
@@ -1793,8 +1848,16 @@ The braking system shall decelerate the vehicle at 5 m/s2.
 The speed sensor shall measure the wheel speed continuously.
 When the system is idle, the vehicle shall not apply brake force.`;
 
+function cmpLoadExample(){
+  $("cmp-model").value = CMP_EXAMPLE_MODEL;
+  $("cmp-reqs").value  = CMP_EXAMPLE_REQS;
+  $("cmp-req-format").value = "plain";
+  parseCompare();
+}
+
 function bootCompare(){
   $("cmp-btn").onclick = parseCompare;
+  $("cmp-example").onclick = cmpLoadExample;
   $("cmp-model").value = CMP_EXAMPLE_MODEL;   // worked example, run from boot()
   $("cmp-reqs").value  = CMP_EXAMPLE_REQS;
 }
@@ -1940,9 +2003,11 @@ let v1ModelFmt = "xmi";
 
 function v1SetFmt(fmt) {
   v1ModelFmt = fmt;
+  // the format-tab button id uses "ttl" for the turtle option
+  const tabKey = fmt === "turtle" ? "ttl" : fmt;
   ["xmi","ttl"].forEach(f => {
     const btn = $("v1-tab-" + f);
-    if (btn) btn.classList.toggle("active", f === fmt);
+    if (btn) btn.classList.toggle("active", f === tabKey);
   });
   const ta = $("v1-model");
   if (fmt === "xmi") {
@@ -1950,11 +2015,50 @@ function v1SetFmt(fmt) {
   } else {
     ta.placeholder = 'Paste Turtle/RDF here…\n\n@prefix sysml: <http://www.omg.org/spec/SysML/> .\n:BrakeSystem a sysml:Block ; rdfs:label "BrakeSystem" .';
   }
+  // keep a worked example on screen when flipping formats — but never clobber
+  // content the user has actually typed
+  const cur = ta.value.trim();
+  if (!cur || cur === V1_EXAMPLE_XMI.trim() || cur === V1_EXAMPLE_TTL.trim()) {
+    ta.value = v1ExampleFor(fmt);
+    if ($("v1-reqs").value.trim() === "") $("v1-reqs").value = V1_EXAMPLE_REQS;
+    parseCompareV1();
+  }
 }
 
 // A small self-contained worked example: a Turtle model with one auditable
 // satisfy link, plus ID-bearing requirements that exercise all three trace
 // states — Verified (SYS-001), Candidate (SYS-002), Gap (SYS-003).
+// XMI worked example — a Papyrus-style SysML v1 model with one auditable
+// satisfy link (BrakeSystem → SYS-001). With the requirement set below it
+// exercises all three trace states: Verified (SYS-001), Candidate (SYS-002),
+// Gap (SYS-003).
+const V1_EXAMPLE_XMI = `<?xml version="1.0" encoding="UTF-8"?>
+<uml:Model xmlns:xmi="http://www.omg.org/spec/XMI/20131001"
+           xmlns:uml="http://www.eclipse.org/uml2/5.0.0/UML"
+           xmlns:SysML="http://www.eclipse.org/papyrus/sysml/1.1/SysML"
+           xmi:id="_m1" name="braking">
+  <packagedElement xmi:type="uml:Package" xmi:id="_pkg" name="automotive">
+    <packagedElement xmi:type="uml:Class" xmi:id="_blk1" name="BrakeSystem">
+      <ownedComment body="Decelerates the vehicle"/>
+      <ownedAttribute xmi:id="_p1" name="pressure"/>
+    </packagedElement>
+    <packagedElement xmi:type="uml:Class" xmi:id="_blk2" name="SpeedSensor">
+      <ownedComment body="Measures wheel speed continuously"/>
+    </packagedElement>
+    <packagedElement xmi:type="uml:Activity" xmi:id="_act1" name="ApplyBrakes"/>
+    <packagedElement xmi:type="uml:Class" xmi:id="_req1" name="BrakingPerf"/>
+    <packagedElement xmi:type="uml:Abstraction" xmi:id="_abs1">
+      <client xmi:idref="_blk1"/>
+      <supplier xmi:idref="_req1"/>
+    </packagedElement>
+  </packagedElement>
+  <SysML:Block xmi:id="_s1" base_Class="_blk1"/>
+  <SysML:Block xmi:id="_s2" base_Class="_blk2"/>
+  <SysML:Requirement xmi:id="_s3" base_Class="_req1" id="SYS-001"
+                     text="The brake system shall decelerate the vehicle at 5 m/s2."/>
+  <SysML:Satisfy xmi:id="_s4" base_Abstraction="_abs1"/>
+</uml:Model>`;
+
 const V1_EXAMPLE_TTL = `@prefix sysmlkg: <http://reqgraph.io/sysml/> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix : <http://example.org/uav#> .
@@ -1977,9 +2081,11 @@ SYS-001,The brake system shall decelerate the vehicle at 5 m/s2 within 200 ms.
 SYS-002,The speed sensor shall measure wheel speed continuously.
 SYS-003,The system shall log every detected fault to the maintenance recorder.`;
 
+function v1ExampleFor(fmt){ return fmt === "xmi" ? V1_EXAMPLE_XMI : V1_EXAMPLE_TTL; }
+
 function v1LoadExample() {
-  v1SetFmt("turtle");
-  $("v1-model").value = V1_EXAMPLE_TTL;
+  // load the worked example matching the currently-selected model format
+  $("v1-model").value = v1ExampleFor(v1ModelFmt);
   $("v1-reqs").value = V1_EXAMPLE_REQS;
   $("v1-req-format").value = "csv";
   $("v1-thr").value = "0.3"; $("v1-thr").dispatchEvent(new Event("input"));

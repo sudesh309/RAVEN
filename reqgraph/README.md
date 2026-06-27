@@ -686,9 +686,19 @@ The page also includes:
   any extra metadata columns), the same force-directed entity graph, and
   one-click downloads of the CSV, JSON, and consolidated element-level GraphML.
 
-**Every section loads a worked example on first paint** — the parser, the
-connection finder, the import pipeline, and both SysML-comparison cards all show
-live output the moment the page opens, so nothing starts blank.
+**Every section — and every feature variant — ships a worked example.** The
+parser, connection finder, import pipeline, and both SysML-comparison cards all
+show live output the moment the page opens, so nothing starts blank. Beyond the
+on-load example, each input *mode* has its own loadable example:
+
+* the **import** panel has an *Example* selector with a ready-to-run sample for
+  every format — **CSV** (with a rationale column), **plain text**, **JSON**,
+  and **ReqIF** XML;
+* the **SysML v2 compare** card has a **Load example** button;
+* the **SysML v1 compare** card loads a worked example for whichever model
+  format tab is active — a Papyrus-style **XMI** model and an equivalent
+  **Turtle/RDF** model, each wired so the requirement set exercises all three
+  trace states (Verified / Candidate / Gap).
 
 ### Force-directed entity graph (subjects & objects)
 
