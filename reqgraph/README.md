@@ -716,6 +716,19 @@ centering gravity settle the layout, then it auto-frames to fit.
   unpin), **scroll** to zoom toward the cursor, **drag the canvas** to pan, and
   use the **+ / − / fit** toolbar; hovering a node highlights its neighbours.
 
+A **controls bar** above the canvas re-shapes the view live, without
+re-querying the backend:
+
+* **Colour by** — *role* (subject/object) or *requirement* (one hue per source
+  requirement, so you can see which phrases came from where);
+* **Show** chips — toggle subjects and objects on/off independently;
+* **Min similarity** slider — hide weaker links to reveal only the strongest
+  matches;
+* **linked only** — hide isolated phrases that share nothing with the set;
+* **labels** — declutter by hiding the phrase labels;
+
+a live legend tracks the current colour scheme and the visible node/link count.
+
 The same `{nodes, edges}` data is available programmatically in the
 `/api/connections` and `/api/export` responses under the `entities` key.
 
