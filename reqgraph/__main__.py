@@ -100,20 +100,50 @@ def _read_sysml_model(path: str):
         sys.exit(f"error: could not read {path}: {exc}")
 
 
-def _read_sysml_v1_model(path: str):
-    """Read a SysML v1 XMI or Turtle file with a friendly error."""
+def _read_sysml_v1_model(path: str, stereotype_roles=None,
+                         stereotype_relations=None):
+    """Read a SysML v1 XMI, Turtle, or Cameo .mdzip file with a friendly error."""
     from .errors import DataFormatError
     from .sysml_v1_parser import read_sysml_v1
     if not os.path.isfile(path):
         sys.exit(f"error: SysML v1 model file not found: {path!r}")
     try:
-        return read_sysml_v1(path)
+        return read_sysml_v1(path, stereotype_roles=stereotype_roles,
+                             stereotype_relations=stereotype_relations)
     except DataFormatError as exc:
         sys.exit(f"error: {exc}")
     except ImportError as exc:
         sys.exit(f"error: {exc}")
     except Exception as exc:
         sys.exit(f"error: could not read {path}: {exc}")
+
+
+def _load_stereotype_map(args):
+    """Build (roles, relations) override dicts from --stereotype-map / -roles."""
+    roles, rels = {}, {}
+    path = getattr(args, "stereotype_map", None)
+    if path:
+        import json
+        try:
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+        except Exception as exc:
+            sys.exit(f"error: could not read --stereotype-map {path!r}: {exc}")
+        if isinstance(data, dict) and ("roles" in data or "relations" in data):
+            roles.update(data.get("roles") or {})
+            rels.update(data.get("relations") or {})
+        elif isinstance(data, dict):
+            _ROLE_NAMES = {"SUBJECT", "OBJECT", "PROCESS", "CONDITION", "ACTOR",
+                           "CONSTRAINT", "MODALITY", "OPERATOR", "DETAILS"}
+            for k, v in data.items():
+                (roles if str(v).strip().upper() in _ROLE_NAMES else rels)[k] = v
+    spec = getattr(args, "stereotype_roles", None)
+    if spec:
+        for pair in spec.split(","):
+            if "=" in pair:
+                k, v = pair.split("=", 1)
+                roles[k.strip()] = v.strip()
+    return (roles or None), (rels or None)
 
 
 def _build_set_graph_cli(items, *, template, extractor, roles, threshold,
@@ -468,7 +498,9 @@ def cmd_compare(args):
 def cmd_compare_v1(args):
     """Semantically compare a SysML v1 model against a requirement set."""
     from pathlib import Path
-    model = _read_sysml_v1_model(args.model_file)
+    stereo_roles, stereo_rels = _load_stereotype_map(args)
+    model = _read_sysml_v1_model(args.model_file, stereotype_roles=stereo_roles,
+                                 stereotype_relations=stereo_rels)
     items = _read_items(args.req_file)
     if not items:
         sys.exit("error: no requirements found in requirement file")
@@ -706,10 +738,19 @@ def main(argv=None):
         help="context-aware comparison of a SysML v1 XMI/Turtle model "
              "against a requirement set (uses graph neighborhood context)")
     pcv1.add_argument("model_file",
-                      help="SysML v1 model (.xmi, .uml, .xml, .ttl, .rdf, .owl, .n3)")
+                      help="SysML v1 model (.xmi, .uml, .xml, .ttl, .rdf, .owl, "
+                           ".n3, or a Cameo/MagicDraw .mdzip archive)")
     pcv1.add_argument("req_file",
                       help="requirement file (.csv, .xlsx, .xls, .json, .reqif, "
                            ".xml, or plain .txt)")
+    pcv1.add_argument("--stereotype-map", metavar="PATH", default=None,
+                      help="JSON file mapping custom-profile stereotypes to IREB "
+                           "roles / trace verbs, e.g. "
+                           '{"roles":{"SafetyRequirement":"CONSTRAINT"},'
+                           '"relations":{"verifies":"satisfy"}}')
+    pcv1.add_argument("--stereotype-roles", metavar="SPEC", default=None,
+                      help="inline custom stereotype→role overrides, e.g. "
+                           "'SafetyRequirement=CONSTRAINT,ECU=SUBJECT'")
     pcv1.add_argument("--threshold",  type=float, default=0.5,
                       help="confidence cut-off 0–1 (default 0.5)")
     pcv1.add_argument("--similarity", default="lexical",

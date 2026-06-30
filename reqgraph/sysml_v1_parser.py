@@ -20,8 +20,10 @@ Both paths produce the same ``SysMLV1Model`` so all downstream code
 
 from __future__ import annotations
 
+import io
 import re
 import xml.etree.ElementTree as ET
+import zipfile
 from dataclasses import dataclass, field
 
 from .core import Role
@@ -283,10 +285,46 @@ class SysMLV1Model:
 # Role mapping
 # ---------------------------------------------------------------------------
 
-def _map_role(uml_type: str, stereotype: str) -> Role:
-    """Map (UML type, SysML stereotype) to an IREB semantic Role."""
+# Name-aware role hints for *custom* stereotypes (company profiles). Checked as
+# ordered substrings after the exact-known map and before the UML-type fallback,
+# so e.g. "SafetyRequirement" → CONSTRAINT, "ECU"/"Subsystem" → SUBJECT.
+_STEREO_ROLE_HINTS = (
+    ("requirement", Role.CONSTRAINT),
+    ("constraint", Role.CONSTRAINT),
+    ("block", Role.SUBJECT),
+    ("subsystem", Role.SUBJECT),
+    ("system", Role.SUBJECT),
+    ("component", Role.SUBJECT),
+    ("assembly", Role.SUBJECT),
+    ("unit", Role.SUBJECT),
+    ("interface", Role.ACTOR),
+    ("port", Role.ACTOR),
+    ("actor", Role.ACTOR),
+    ("value", Role.OBJECT),
+    ("flow", Role.OBJECT),
+    ("property", Role.OBJECT),
+    ("attribute", Role.OBJECT),
+    ("state", Role.CONDITION),
+    ("mode", Role.CONDITION),
+    ("activity", Role.PROCESS),
+    ("action", Role.PROCESS),
+    ("function", Role.PROCESS),
+    ("behavio", Role.PROCESS),
+)
+
+
+def _map_role(uml_type: str, stereotype: str, overrides: dict | None = None) -> Role:
+    """Map (UML type, SysML stereotype) to an IREB semantic Role.
+
+    *overrides* is an optional ``{stereotype_lower: Role}`` map (a company
+    profile's custom stereotypes); it wins over every built-in rule.
+    """
     st = stereotype.lower()
     ut = uml_type.lower()
+
+    # Explicit user override wins (custom profile stereotype → role)
+    if overrides and st in overrides:
+        return overrides[st]
 
     # Stereotype-first overrides
     if st in ("block", "constraintblock", "sysmlblock"):
@@ -299,6 +337,12 @@ def _map_role(uml_type: str, stereotype: str) -> Role:
         return Role.OBJECT
     if st in ("satisfy", "refine", "derive", "trace", "allocate"):
         return Role.CONSTRAINT  # will be turned into a V1Relation, not element
+
+    # Name-aware heuristic for custom stereotypes
+    if st:
+        for needle, role in _STEREO_ROLE_HINTS:
+            if needle in st:
+                return role
 
     # UML-type fallback
     if "activity" in ut or "action" in ut or "behavior" in ut:
@@ -349,8 +393,74 @@ _RELATION_STEREOTYPE_MAP = {
     "allocate": "allocate",
 }
 
+# substring → canonical trace verb, so custom relation stereotypes
+# (e.g. "verifies", "isAllocatedTo", "deriveReqt") still map to an auditable link
+_TRACE_SYNONYMS = (
+    ("satisf", "satisfy"),
+    ("verif", "satisfy"),
+    ("derive", "derive"),
+    ("refine", "refine"),
+    ("trace", "trace"),
+    ("allocat", "allocate"),
+)
 
-def _parse_xmi(text: str, source_path: str = "") -> SysMLV1Model:
+
+def _resolve_rel_type(stereo: str, overrides: dict | None = None) -> str:
+    """Map an abstraction/dependency stereotype name to a relation type.
+
+    Honours an explicit ``{name_lower: rel_type}`` override, then the exact
+    known map, then a trace-verb substring; otherwise it *preserves the raw
+    custom stereotype name* (lower-cased) instead of collapsing it to a generic
+    ``"association"`` — so custom relations stay visible in the KG.
+    """
+    low = (stereo or "").strip().lower()
+    if not low:
+        return "association"
+    if overrides and low in overrides:
+        return overrides[low]
+    if low in _RELATION_STEREOTYPE_MAP:
+        return _RELATION_STEREOTYPE_MAP[low]
+    for needle, canon in _TRACE_SYNONYMS:
+        if needle in low:
+            return canon
+    return low
+
+
+def _norm_role_overrides(d: dict | None) -> dict:
+    """Normalise a {stereotype: role} map to {name_lower: Role}."""
+    out: dict = {}
+    for k, v in (d or {}).items():
+        if not k:
+            continue
+        if isinstance(v, Role):
+            out[str(k).strip().lower()] = v
+        else:
+            try:
+                out[str(k).strip().lower()] = Role[str(v).strip().upper()]
+            except KeyError:
+                pass  # unknown role name → ignore that entry
+    return out
+
+
+def _norm_rel_overrides(d: dict | None) -> dict:
+    """Normalise a {stereotype: rel_type} map to {name_lower: rel_lower}."""
+    return {str(k).strip().lower(): str(v).strip().lower()
+            for k, v in (d or {}).items() if k}
+
+
+_BASE_ATTRS = (
+    "base_Class", "base_Activity", "base_Property", "base_Port",
+    "base_Constraint", "base_StateMachine", "base_State", "base_Component",
+    "base_Behavior", "base_Operation", "base_Element", "base_NamedElement",
+)
+_BASE_ABSTRACTION_ATTRS = (
+    "base_Abstraction", "base_Dependency", "base_DirectedRelationship",
+)
+
+
+def _parse_xmi(text: str, source_path: str = "",
+               role_overrides: dict | None = None,
+               rel_overrides: dict | None = None) -> SysMLV1Model:
     """Two-pass XMI parser for SysML v1 models."""
     try:
         root = ET.fromstring(text)
@@ -474,32 +584,40 @@ def _parse_xmi(text: str, source_path: str = "") -> SysMLV1Model:
     # abstraction_stereotypes[abs_xmi_id] = stereotype_name
     abstraction_stereo: dict[str, str] = {}
 
+    # A stereotype application is any element carrying a ``base_*`` attribute
+    # that points at the element/relation it extends. Detecting by that
+    # attribute (rather than by a known SysML namespace) means *custom* company
+    # profiles are imported too, with their raw stereotype name preserved.
     for child in root.iter():
-        tag_ns = _get_ns(child.tag)
-        if not tag_ns or not _is_sysml_ns(tag_ns):
-            continue
-        stereo_name = _strip_ns(child.tag)
-        if not stereo_name or stereo_name.lower() in ("model", "package"):
+        local = _strip_ns(child.tag)
+        if not local or local.lower() in ("model", "package"):
             continue
 
-        # Find which element this stereotype applies to
         base_id = None
-        for attr_name in ("base_Class", "base_Activity", "base_Property",
-                          "base_Port", "base_Constraint", "base_StateMachine",
-                          "base_State", "base_Element", "base_NamedElement"):
+        for attr_name in _BASE_ATTRS:
             val = child.get(attr_name)
             if val:
                 base_id = val
                 break
 
-        base_abs_id = child.get("base_Abstraction")
+        base_abs_id = None
+        for attr_name in _BASE_ABSTRACTION_ATTRS:
+            val = child.get(attr_name)
+            if val:
+                base_abs_id = val
+                break
+
+        if not base_id and not base_abs_id:
+            continue  # ordinary model element, not a stereotype application
+
+        stereo_name = local
 
         if base_id:
             if base_id not in stereotype_map:
                 stereotype_map[base_id] = {}
             stereotype_map[base_id]["stereotype"] = stereo_name
-            # Requirement-specific attributes
-            if stereo_name.lower() in ("requirement",):
+            # Requirement-like stereotypes (standard or custom) carry text/id
+            if "requirement" in stereo_name.lower():
                 for attr in ("text", "Text"):
                     v = child.get(attr)
                     if v:
@@ -526,7 +644,7 @@ def _parse_xmi(text: str, source_path: str = "") -> SysMLV1Model:
         stereo_info = stereotype_map.get(eid, {})
         stereotype = stereo_info.get("stereotype", "")
 
-        role = _map_role(etype, stereotype)
+        role = _map_role(etype, stereotype, role_overrides)
 
         elem = V1Element(
             xmi_id=eid,
@@ -548,8 +666,8 @@ def _parse_xmi(text: str, source_path: str = "") -> SysMLV1Model:
 
     # Abstraction-based relations (satisfy, refine, etc.)
     for abs_id, abs_info in abstractions.items():
-        stereo = abstraction_stereo.get(abs_id, "").lower()
-        rel_type = _RELATION_STEREOTYPE_MAP.get(stereo, "association")
+        stereo = abstraction_stereo.get(abs_id, "")
+        rel_type = _resolve_rel_type(stereo, rel_overrides)
 
         for client_id in abs_info["clients"]:
             for supplier_id in abs_info["suppliers"]:
@@ -654,7 +772,9 @@ _RDF_PRED_REL: dict[str, str] = {
 }
 
 
-def _parse_turtle(text: str, source_path: str = "") -> SysMLV1Model:
+def _parse_turtle(text: str, source_path: str = "",
+                  role_overrides: dict | None = None,
+                  rel_overrides: dict | None = None) -> SysMLV1Model:
     """Parse a Turtle/RDF SysML ontology into SysMLV1Model.
 
     Requires ``rdflib>=6.0``.
@@ -724,6 +844,11 @@ def _parse_turtle(text: str, source_path: str = "") -> SysMLV1Model:
 
     def _resolve_role(type_locals: list[str]) -> tuple[str, Role]:
         """Return (stereotype, role) for a list of rdf:type local names."""
+        # explicit custom-stereotype overrides win
+        if role_overrides:
+            for tl in type_locals:
+                if tl in role_overrides:
+                    return tl.capitalize(), role_overrides[tl]
         for tl in type_locals:
             if tl in _RDF_TYPE_ROLE:
                 return tl.capitalize(), _RDF_TYPE_ROLE[tl]
@@ -739,6 +864,11 @@ def _parse_turtle(text: str, source_path: str = "") -> SysMLV1Model:
                   if t not in ("class", "thing", "namedindividual", "ontology",
                                "objectproperty", "datatypeproperty", "annotation")]
         stereotype = useful[0].capitalize() if useful else ""
+        # name-aware heuristic for custom RDF stereotypes
+        for tl in useful:
+            for needle, role in _STEREO_ROLE_HINTS:
+                if needle in tl:
+                    return stereotype, role
         return stereotype, Role.SUBJECT
 
     # --- Step 2: build elements -------------------------------------------
@@ -781,7 +911,7 @@ def _parse_turtle(text: str, source_path: str = "") -> SysMLV1Model:
 
     for s, p, o in g:
         plocal = _local_name(p).lower()
-        rel_type = _RDF_PRED_REL.get(plocal)
+        rel_type = (rel_overrides or {}).get(plocal) or _RDF_PRED_REL.get(plocal)
         if not rel_type:
             continue
         src_local = _local_name(s)
@@ -825,25 +955,116 @@ def _detect_format(text: str, path: str = "") -> str:
 
 
 def parse_sysml_v1(text: str, source_path: str = "",
-                   fmt: str | None = None) -> SysMLV1Model:
+                   fmt: str | None = None,
+                   stereotype_roles: dict | None = None,
+                   stereotype_relations: dict | None = None) -> SysMLV1Model:
     """Parse SysML v1 XMI or Turtle text into a ``SysMLV1Model``.
 
     *fmt* may be ``"xmi"`` or ``"turtle"`` to force the parser; when omitted
     (or any other value) the format is auto-detected from the content and the
     *source_path* extension.
+
+    *stereotype_roles* / *stereotype_relations* are optional maps for a company
+    profile's custom stereotypes, e.g. ``{"SafetyRequirement": "CONSTRAINT"}``
+    and ``{"verifies": "satisfy"}``; they override the built-in heuristics.
     """
     if not text or not text.strip():
         raise DataFormatError("empty SysML v1 input")
+    role_ov = _norm_role_overrides(stereotype_roles)
+    rel_ov = _norm_rel_overrides(stereotype_relations)
     fmt = (fmt or "").lower().strip()
     if fmt not in ("xmi", "turtle"):
         fmt = _detect_format(text, source_path)
     if fmt == "turtle":
-        return _parse_turtle(text, source_path)
-    return _parse_xmi(text, source_path)
+        return _parse_turtle(text, source_path, role_ov, rel_ov)
+    return _parse_xmi(text, source_path, role_ov, rel_ov)
 
 
-def read_sysml_v1(path: str) -> SysMLV1Model:
-    """Read a SysML v1 XMI or Turtle file from *path*.
+# ---------------------------------------------------------------------------
+# Cameo / MagicDraw .mdzip archive support
+# ---------------------------------------------------------------------------
+
+_MDZIP_EXTS = ("mdzip", "zip", "mdxml")
+# MagicDraw/Cameo store the model in archive members whose names contain these
+_MD_MODEL_HINTS = ("uml_model.model", "uml_model.shared_model")
+
+
+def _looks_like_xmi(text: str) -> bool:
+    head = text[:400].lstrip()
+    if "<uml:" in head or "<xmi:XMI" in head:
+        return True
+    return head.startswith("<?xml") and ("uml" in text[:2000] or "XMI" in text[:2000])
+
+
+def _extract_mdzip_parts(data: bytes) -> list[str]:
+    """Return the XMI model-fragment texts inside a Cameo/MagicDraw .mdzip."""
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(data))
+    except zipfile.BadZipFile as exc:
+        raise DataFormatError(f"not a valid .mdzip/zip archive: {exc}") from exc
+    names = zf.namelist()
+    preferred = [n for n in names if any(h in n for h in _MD_MODEL_HINTS)]
+    parts: list[str] = []
+    for n in (preferred or names):
+        try:
+            txt = zf.read(n).decode("utf-8", "replace")
+        except Exception:
+            continue
+        if _looks_like_xmi(txt):
+            parts.append(txt)
+    return parts
+
+
+def _merge_models(models: list[SysMLV1Model], source_path: str = "") -> SysMLV1Model:
+    """Concatenate elements (dedup by xmi_id), relations and packages."""
+    elements: list[V1Element] = []
+    seen: set = set()
+    relations: list[V1Relation] = []
+    packages: list[str] = []
+    for m in models:
+        for e in m.elements:
+            if e.xmi_id not in seen:
+                seen.add(e.xmi_id)
+                elements.append(e)
+        relations.extend(m.relations)
+        for p in m.packages:
+            if p not in packages:
+                packages.append(p)
+    return SysMLV1Model(elements=elements, relations=relations,
+                        source_path=source_path, packages=packages)
+
+
+def parse_mdzip(data: bytes, source_path: str = "",
+                stereotype_roles: dict | None = None,
+                stereotype_relations: dict | None = None) -> SysMLV1Model:
+    """Parse a Cameo/MagicDraw ``.mdzip`` archive (raw bytes) into a model.
+
+    An ``.mdzip`` is a ZIP whose UML model lives in one or more XMI parts
+    (``com.nomagic.magicdraw.uml_model.model`` plus shared-package parts). The
+    parts are parsed with the standard XMI parser and merged into one model.
+    """
+    parts = _extract_mdzip_parts(data)
+    if not parts:
+        raise DataFormatError(
+            "no SysML/UML model found inside the .mdzip archive "
+            "(expected a 'uml_model.model' XMI part)")
+    role_ov = _norm_role_overrides(stereotype_roles)
+    rel_ov = _norm_rel_overrides(stereotype_relations)
+    models = []
+    for p in parts:
+        try:
+            models.append(_parse_xmi(p, source_path, role_ov, rel_ov))
+        except DataFormatError:
+            continue  # skip non-model fragments
+    if not models:
+        raise DataFormatError("the .mdzip archive contained no parsable XMI model")
+    return _merge_models(models, source_path)
+
+
+def read_sysml_v1(path: str,
+                  stereotype_roles: dict | None = None,
+                  stereotype_relations: dict | None = None) -> SysMLV1Model:
+    """Read a SysML v1 XMI, Turtle, or Cameo ``.mdzip`` file from *path*.
 
     Auto-detects format by extension and content sniffing.
     Raises ``DataFormatError`` for empty / unreadable files.
@@ -851,11 +1072,22 @@ def read_sysml_v1(path: str) -> SysMLV1Model:
     import os
     if not os.path.isfile(path):
         raise DataFormatError(f"SysML v1 model file not found: {path!r}")
+    ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
     try:
-        with open(path, encoding="utf-8", errors="replace") as fh:
-            text = fh.read()
+        with open(path, "rb") as fh:
+            raw = fh.read()
     except OSError as exc:
         raise DataFormatError(f"cannot read {path!r}: {exc}") from exc
+    if not raw:
+        raise DataFormatError(f"SysML v1 file is empty: {path!r}")
+    # A .mdzip/.zip (or anything with the ZIP magic) is binary → unzip first
+    if ext in _MDZIP_EXTS or raw[:4] == b"PK\x03\x04":
+        return parse_mdzip(raw, source_path=path,
+                           stereotype_roles=stereotype_roles,
+                           stereotype_relations=stereotype_relations)
+    text = raw.decode("utf-8", errors="replace")
     if not text.strip():
         raise DataFormatError(f"SysML v1 file is empty: {path!r}")
-    return parse_sysml_v1(text, source_path=path)
+    return parse_sysml_v1(text, source_path=path,
+                          stereotype_roles=stereotype_roles,
+                          stereotype_relations=stereotype_relations)

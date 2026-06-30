@@ -606,6 +606,32 @@ def compare_request(state: GuiState, payload: dict) -> dict:
     return result
 
 
+_ROLE_NAMES = {"SUBJECT", "OBJECT", "PROCESS", "CONDITION", "ACTOR",
+               "CONSTRAINT", "MODALITY", "OPERATOR", "DETAILS", "ROOT", "GLUE"}
+
+
+def _split_stereotype_map(raw):
+    """Split a stereotype-map payload into (roles, relations) dicts.
+
+    Accepts either an explicit ``{"roles": {...}, "relations": {...}}`` shape,
+    or a flat ``{"Stereotype": "VALUE"}`` map where a value naming a known IREB
+    role is treated as a role mapping and anything else as a relation mapping.
+    """
+    if not isinstance(raw, dict) or not raw:
+        return None, None
+    if "roles" in raw or "relations" in raw:
+        roles = raw.get("roles") if isinstance(raw.get("roles"), dict) else {}
+        rels = raw.get("relations") if isinstance(raw.get("relations"), dict) else {}
+        return (roles or None), (rels or None)
+    roles, rels = {}, {}
+    for k, v in raw.items():
+        if isinstance(v, str) and v.strip().upper() in _ROLE_NAMES:
+            roles[k] = v.strip().upper()
+        else:
+            rels[k] = v
+    return (roles or None), (rels or None)
+
+
 def compare_v1_request(state: GuiState, payload: dict) -> dict:
     """Handle one /api/compare-v1 payload.
 
@@ -635,7 +661,7 @@ def compare_v1_request(state: GuiState, payload: dict) -> dict:
     template / backend : str, optional
         Requirement parsing template / extraction backend.
     """
-    from .sysml_v1_parser import parse_sysml_v1
+    from .sysml_v1_parser import parse_sysml_v1, parse_mdzip
     from .sysml_v1_compare import compare_v1 as _compare_v1
 
     model_content = payload.get("model_content", "")
@@ -643,19 +669,37 @@ def compare_v1_request(state: GuiState, payload: dict) -> dict:
 
     if not model_content or not str(model_content).strip():
         raise ReqGraphError(
-            "please paste a SysML v1 XMI or Turtle model in the left panel")
+            "please provide a SysML v1 model — paste XMI/Turtle, or upload a "
+            "Cameo .mdzip in the left panel")
     if not req_content or not str(req_content).strip():
         raise ReqGraphError(
             "please paste requirements (one per line, or CSV/JSON) in the right panel")
 
     warnings: list = []
 
-    # Parse the SysML v1 model (honor the format hint from the XMI/Turtle tab;
-    # falls back to content auto-detection when the hint is absent/invalid)
+    # Optional custom-stereotype override maps (company SysML profile):
+    # payload may carry {"stereotype_map": {"roles": {...}, "relations": {...}}}
+    # or a flat {"SafetyRequirement": "CONSTRAINT", "verifies": "satisfy"} map.
+    stereo_roles, stereo_rels = _split_stereotype_map(payload.get("stereotype_map"))
+
+    # Parse the SysML v1 model (honor the format hint from the XMI/Turtle/mdzip
+    # tab; falls back to content auto-detection when the hint is absent/invalid)
     model_fmt = (payload.get("model_format") or "").lower().strip()
+    model_enc = (payload.get("model_encoding") or "").lower().strip()
     try:
-        model = parse_sysml_v1(str(model_content), source_path="<pasted model>",
-                               fmt=model_fmt or None)
+        if model_fmt == "mdzip" or model_enc == "base64":
+            import base64
+            blob = str(model_content)
+            raw = blob.split(",", 1)[1] if "," in blob else blob
+            data = base64.b64decode(raw)
+            model = parse_mdzip(data, source_path="<uploaded.mdzip>",
+                                stereotype_roles=stereo_roles,
+                                stereotype_relations=stereo_rels)
+        else:
+            model = parse_sysml_v1(str(model_content), source_path="<pasted model>",
+                                   fmt=model_fmt or None,
+                                   stereotype_roles=stereo_roles,
+                                   stereotype_relations=stereo_rels)
     except Exception as exc:
         raise ReqGraphError(f"could not parse SysML v1 model: {exc}") from exc
 

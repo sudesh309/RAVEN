@@ -806,12 +806,21 @@
     <div style="display:flex;gap:8px;margin-bottom:8px;">
       <button class="tab-btn active" id="v1-tab-xmi" onclick="v1SetFmt('xmi')">XMI / XML</button>
       <button class="tab-btn" id="v1-tab-ttl" onclick="v1SetFmt('turtle')">Turtle / RDF</button>
+      <button class="tab-btn" id="v1-tab-mdzip" onclick="v1SetFmt('mdzip')">Cameo .mdzip</button>
     </div>
 
     <div class="cmp-two-col">
       <div style="display:flex;flex-direction:column;gap:6px;flex:1">
         <label for="v1-model"><b>SysML v1 model</b></label>
         <textarea id="v1-model" rows="14" placeholder="Paste XMI or Turtle here…"></textarea>
+        <div id="v1-mdzip-pane" style="display:none">
+          <input type="file" id="v1-mdzip-file" accept=".mdzip,.zip"
+                 style="font:inherit;cursor:pointer">
+          <div class="hint" style="display:block;margin-top:6px">
+            Upload a <b>Cameo / MagicDraw .mdzip</b> — the UML model is extracted
+            from the archive and compared. <span id="v1-mdzip-name"></span>
+          </div>
+        </div>
       </div>
       <div style="display:flex;flex-direction:column;gap:6px;flex:1">
         <label for="v1-reqs">
@@ -855,6 +864,20 @@
         title="Fill both panels with a small worked example and run it">Load worked example</button>
       <button class="primary" id="v1-btn" style="align-self:flex-end">Compare v1 &rarr;</button>
     </div>
+
+    <details class="paramhelp" style="margin-top:8px">
+      <summary>Custom stereotypes? Map your company profile</summary>
+      <p style="font-size:.85rem;margin:6px 0">
+        If your model uses custom-profile stereotypes (e.g. a <code>SafetyRequirement</code>
+        block or a custom <code>verifies</code> relation), map each one to an IREB
+        <b>role</b> (SUBJECT / OBJECT / PROCESS / CONDITION / ACTOR / CONSTRAINT) or a
+        trace <b>verb</b> (satisfy / derive / refine / trace / allocate). One mapping per
+        line — custom stereotypes are auto-detected, this just pins ambiguous ones.
+      </p>
+      <textarea id="v1-stereo-map" rows="3" spellcheck="false"
+        style="width:100%;font-family:ui-monospace,monospace;font-size:12px"
+        placeholder="SafetyRequirement = CONSTRAINT&#10;ECU = SUBJECT&#10;verifies = satisfy"></textarea>
+    </details>
 
     <details style="margin-top:8px">
       <summary style="cursor:pointer;color:var(--accent);font-size:.85rem">How context hops work</summary>
@@ -2145,16 +2168,27 @@ bootCompareV1();
 
 let v1Last = null;
 let v1ModelFmt = "xmi";
+let v1MdzipB64 = null;     // base64 data-URL of an uploaded .mdzip
+let v1MdzipName = "";
 
 function v1SetFmt(fmt) {
   v1ModelFmt = fmt;
   // the format-tab button id uses "ttl" for the turtle option
   const tabKey = fmt === "turtle" ? "ttl" : fmt;
-  ["xmi","ttl"].forEach(f => {
+  ["xmi","ttl","mdzip"].forEach(f => {
     const btn = $("v1-tab-" + f);
     if (btn) btn.classList.toggle("active", f === tabKey);
   });
   const ta = $("v1-model");
+  const mz = $("v1-mdzip-pane");
+  // mdzip is a binary upload — swap the textarea for the file input
+  if (fmt === "mdzip") {
+    ta.style.display = "none";
+    mz.style.display = "";
+    return;                       // no paste example for an upload
+  }
+  ta.style.display = "";
+  mz.style.display = "none";
   if (fmt === "xmi") {
     ta.placeholder = 'Paste SysML v1 XMI here…\n\n<uml:Model xmlns:uml="http://www.eclipse.org/uml2/5.0.0/UML" …>';
   } else {
@@ -2168,6 +2202,27 @@ function v1SetFmt(fmt) {
     if ($("v1-reqs").value.trim() === "") $("v1-reqs").value = V1_EXAMPLE_REQS;
     parseCompareV1();
   }
+}
+
+// Parse the "Stereotype = ROLE_or_verb" lines from the custom-stereotype box
+// into {roles:{…}, relations:{…}} for the backend.
+const V1_ROLE_NAMES = new Set(["SUBJECT","OBJECT","PROCESS","CONDITION","ACTOR","CONSTRAINT"]);
+function v1StereotypeMap(){
+  const txt = ($("v1-stereo-map") && $("v1-stereo-map").value || "").trim();
+  if(!txt) return null;
+  const roles = {}, relations = {};
+  for(const line of txt.split("\n")){
+    const m = line.split(/[=:]/);
+    if(m.length < 2) continue;
+    const name = m[0].trim(), val = m.slice(1).join("=").trim();
+    if(!name || !val) continue;
+    if(V1_ROLE_NAMES.has(val.toUpperCase())) roles[name] = val.toUpperCase();
+    else relations[name] = val.toLowerCase();
+  }
+  const out = {};
+  if(Object.keys(roles).length) out.roles = roles;
+  if(Object.keys(relations).length) out.relations = relations;
+  return Object.keys(out).length ? out : null;
 }
 
 // A small self-contained worked example: a Turtle model with one auditable
@@ -2240,6 +2295,17 @@ function v1LoadExample() {
 function bootCompareV1() {
   $("v1-btn").onclick = parseCompareV1;
   $("v1-example").onclick = v1LoadExample;
+  // read an uploaded .mdzip as base64 and compare it
+  const f = $("v1-mdzip-file");
+  if(f) f.addEventListener("change", () => {
+    if(!f.files.length) return;
+    const file = f.files[0];
+    v1MdzipName = file.name;
+    $("v1-mdzip-name").textContent = "— loaded: " + file.name;
+    const reader = new FileReader();
+    reader.onload = e => { v1MdzipB64 = e.target.result; parseCompareV1(); };
+    reader.readAsDataURL(file);
+  });
   // the worked example is loaded + run from boot() (after the TDZ-bound
   // v1 module state below has initialised and the selectors are populated)
 }
@@ -2252,15 +2318,22 @@ async function parseCompareV1() {
   try {
     const roles = [...document.querySelectorAll(".v1-role")]
       .filter(cb => cb.checked).map(cb => cb.value);
+    const isMdzip = v1ModelFmt === "mdzip";
+    if(isMdzip && !v1MdzipB64){
+      showV1Error("choose a .mdzip file to upload first");
+      btn.disabled = false; btn.textContent = lbl; return;
+    }
     const payload = {
-      model_content: $("v1-model").value,
+      model_content: isMdzip ? v1MdzipB64 : $("v1-model").value,
       model_format:  v1ModelFmt,
+      model_encoding: isMdzip ? "base64" : undefined,
       req_content:   $("v1-reqs").value,
       req_format:    $("v1-req-format").value,
       threshold:     parseFloat($("v1-thr").value),
       context_hops:  parseInt($("v1-hops").value),
       similarity:    $("v1-sim").value,
       roles,
+      stereotype_map: v1StereotypeMap(),
     };
     const resp = await fetch("/api/compare-v1", {
       method: "POST",

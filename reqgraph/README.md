@@ -573,13 +573,16 @@ python -m reqgraph compare model.sysml reqs.txt --format json --graphml match.gr
 python -m reqgraph compare model.sysml reqs.csv --similarity embedding --threshold 0.5
 ```
 
-### `compare-v1` — SysML v1 XMI / Turtle (context-aware)
+### `compare-v1` — SysML v1 XMI / Turtle / Cameo `.mdzip` (context-aware)
 
-For SysML v1 models exported as **XMI** (MagicDraw/Cameo/Papyrus) or as a
+For SysML v1 models exported as **XMI** (MagicDraw/Cameo/Papyrus), as a
 **Turtle/RDF ontology** (auto-detected by extension/content; Turtle needs
-`rdflib`). Instead of matching on element names alone, it builds a *neighborhood
-context* for each element by BFS over the model graph (`--context-hops`, default
-2) and scores:
+`rdflib`), or as a native **Cameo/MagicDraw `.mdzip`** project — the `.mdzip`
+ZIP is opened, its UML model XMI part(s) are extracted (and merged if the model
+spans several parts) and parsed automatically, in the CLI and in the GUI's
+*Cameo .mdzip* upload tab. Instead of matching on element names alone, it builds
+a *neighborhood context* for each element by BFS over the model graph
+(`--context-hops`, default 2) and scores:
 
 ```
 confidence = 0.25·name + 0.55·context + 0.20·satisfaction_bonus
@@ -589,12 +592,32 @@ The satisfaction bonus rewards elements the model already links to a matching
 requirement via a `satisfy`/`refine` relation.
 
 ```bash
-python -m reqgraph compare-v1 model.xmi reqs.csv                  # XMI input
-python -m reqgraph compare-v1 model.ttl reqs.csv                  # Turtle/RDF input
+python -m reqgraph compare-v1 model.xmi   reqs.csv               # XMI input
+python -m reqgraph compare-v1 model.ttl   reqs.csv               # Turtle/RDF input
+python -m reqgraph compare-v1 model.mdzip reqs.csv               # Cameo .mdzip
 python -m reqgraph compare-v1 model.xmi reqs.csv --context-hops 3 --threshold 0.4 \
         --report match.json --graphml match.graphml \
         --kg model_kg.graphml --out-turtle model.ttl --ontology-graphml ont.graphml
 ```
+
+**Custom stereotypes.** Company SysML profiles apply custom stereotypes
+(`SafetyRequirement`, `ECU`, a custom `verifies` relation, …). These import
+automatically: a stereotype application is detected by its `base_*` attribute
+(not by namespace), its name is preserved through every export, custom
+requirement stereotypes keep their id/text and route to `CONSTRAINT`, and custom
+trace relations (`verifies`, `isAllocatedTo`, …) normalise to the canonical
+`satisfy`/`derive`/… verbs so they still count as **auditable** in the RVTM. When
+the name heuristic isn't enough, pin a profile explicitly:
+
+```bash
+python -m reqgraph compare-v1 model.mdzip reqs.csv \
+    --stereotype-roles "SafetyRequirement=CONSTRAINT,ECU=SUBJECT" \
+    --stereotype-map profile.json   # {"roles":{…},"relations":{"verifies":"satisfy"}}
+```
+
+In the GUI's *Compare SysML v1* card, the same mapping is available under the
+**“Custom stereotypes? Map your company profile”** box (one `Stereotype = ROLE`
+per line).
 
 Extra outputs unique to `compare-v1`:
 
