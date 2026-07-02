@@ -588,6 +588,28 @@ def test_gui_connections_entity_graph_shape():
     assert any(e["role"] == "SUBJECT" for e in ents["edges"])
 
 
+def test_gui_serves_roadmap_page():
+    """/roadmap.html serves the constraints & roadmap page; unknown paths 404."""
+    import threading
+    import urllib.request
+    import urllib.error
+    from reqgraph.gui import make_server
+    server = make_server(port=0)
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        html = urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/roadmap.html", timeout=10).read().decode()
+        assert "Constraints" in html and "RAVEN" in html
+        # whitelist only — arbitrary paths must not be served
+        with pytest.raises(urllib.error.HTTPError):
+            urllib.request.urlopen(
+                f"http://127.0.0.1:{port}/../gui.py", timeout=10)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_gui_export_includes_entity_graph():
     from reqgraph.gui import GuiState, export_request
     csv = ("id,text\n"

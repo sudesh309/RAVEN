@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RAVEN — Constraints &amp; Roadmap</title>
+<style>
+  :root{
+    --bg:#f7f6f3; --card:#ffffff; --border:#e4e2da; --text:#2c2c2a;
+    --muted:#6f6e68; --accent:#534AB7; --accent-soft:#EEEDFE;
+    --ok:#0F6E56; --ok-soft:#E1F5EE; --bad:#A32D2D; --bad-soft:#FCEBEB;
+    --warn:#7A5A12; --warn-soft:#FBF3E2;
+    font-size:15px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font-family:"Segoe UI",system-ui,-apple-system,sans-serif;line-height:1.55}
+  header{display:flex;align-items:baseline;gap:12px;padding:18px 28px 6px}
+  header h1{font-size:20px;font-weight:600;margin:0}
+  header h1 .brand{font-weight:800;letter-spacing:.06em;color:var(--accent)}
+  header .sub{color:var(--muted);font-size:13px}
+  header a.back{margin-left:auto;color:var(--accent);font-size:13px;
+                text-decoration:none;font-weight:600}
+  header a.back:hover{text-decoration:underline}
+  main{max-width:1180px;margin:0 auto;padding:10px 28px 48px;display:flex;
+       flex-direction:column;gap:16px}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:12px;
+        padding:16px 18px}
+  .card h2{font-size:13px;font-weight:600;letter-spacing:.04em;color:var(--muted);
+           text-transform:uppercase;margin:0 0 10px;display:flex;align-items:center;gap:10px}
+  .card h2 .fname{color:var(--text);font-size:15px;text-transform:none;letter-spacing:0}
+  p.lead{margin:0 0 12px;color:var(--muted);font-size:13.5px}
+  .status{font-size:11px;font-weight:600;padding:2px 10px;border-radius:99px;
+          border:1px solid;text-transform:none;letter-spacing:.02em}
+  .st-stable{background:var(--ok-soft);color:var(--ok);border-color:#bfe6d8}
+  .st-beta{background:var(--warn-soft);color:var(--warn);border-color:#ECD9A6}
+  .st-heur{background:var(--accent-soft);color:var(--accent);border-color:#d9d6f5}
+  .tri{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px}
+  .tri h3{font-size:11.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+          margin:0 0 6px;display:flex;align-items:center;gap:6px}
+  .tri .c-lim h3{color:var(--bad)} .tri .c-wk h3{color:var(--warn)}
+  .tri .c-fp h3{color:var(--ok)}
+  .tri ul{margin:0;padding-left:18px;font-size:13px}
+  .tri li{margin-bottom:6px}
+  .tri li b{font-weight:600}
+  code{background:var(--accent-soft);border-radius:4px;padding:1px 5px;font-size:12px}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12.5px;color:var(--muted);
+          align-items:center}
+  .toc{display:flex;flex-wrap:wrap;gap:8px}
+  .toc a{font-size:12.5px;color:var(--accent);text-decoration:none;border:1px solid var(--border);
+         background:#fff;border-radius:99px;padding:4px 12px}
+  .toc a:hover{border-color:var(--accent)}
+  .prod ol{margin:6px 0 0;padding-left:20px;font-size:13.5px}
+  .prod li{margin-bottom:8px}
+  html{scroll-behavior:smooth}
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="brand">RAVEN</span></h1>
+  <span class="sub">Constraints, workarounds &amp; roadmap — per feature</span>
+  <a class="back" href="/">&larr; back to the tool</a>
+</header>
+<main>
+
+  <section class="card">
+    <h2>How to read this page</h2>
+    <p class="lead">Every feature below is listed with three honest columns:
+      <b>Constraints</b> (what it cannot do today, and why), <b>Workarounds</b>
+      (what you can do right now inside the tool), and <b>Planned</b> (the
+      intended fix). Status chips:
+      <span class="status st-stable">Stable</span> works as documented and is
+      covered by the automated test suite ·
+      <span class="status st-beta">Beta</span> works but validated mainly on
+      synthetic data ·
+      <span class="status st-heur">Heuristic</span> produces suggestions that
+      need an engineer's confirmation, by design.</p>
+    <div class="toc">
+      <a href="#f-parse">1 · Parse &amp; analyse</a>
+      <a href="#f-connect">2 · Find connections</a>
+      <a href="#f-import">3 · Import &amp; analyze</a>
+      <a href="#f-v2">4 · SysML v2 compare</a>
+      <a href="#f-v1">5 · SysML v1 / .mdzip compare</a>
+      <a href="#f-rvtm">RVTM traceability</a>
+      <a href="#f-graph">Entity graph</a>
+      <a href="#f-backends">Extraction backends</a>
+      <a href="#f-platform">Platform &amp; production path</a>
+    </div>
+  </section>
+
+  <section class="card" id="f-parse">
+    <h2><span class="fname">1 · Parse &amp; analyse a requirement</span>
+        <span class="status st-stable">Stable</span></h2>
+    <p class="lead">IREB-Rupp / EARS role tiling with a byte-exact round-trip
+      guarantee, quality smells, type and EARS classification, compound splitting.</p>
+    <div class="tri">
+      <div class="c-lim"><h3>Constraints</h3><ul>
+        <li><b>English only.</b> The rule extractor's modality/condition cues
+          (shall, when, while…) are English patterns.</li>
+        <li>Role boundaries are heuristic — unusual grammar (deep nesting,
+          passive chains) can mis-tile a span.</li>
+        <li>Quality smells are lexical checks, not semantic understanding — a
+          precise-sounding but wrong requirement passes.</li>
+      </ul></div>
+      <div class="c-wk"><h3>Workarounds</h3><ul>
+        <li>Switch the <b>backend</b> (rules → spaCy → BERT) per requirement and
+          keep the best tiling.</li>
+        <li>Edit the text and re-parse instantly; the round-trip check proves
+          nothing was silently lost.</li>
+        <li>Compound inputs are auto-split into per-requirement tabs.</li>
+      </ul></div>
+      <div class="c-fp"><h3>Planned</h3><ul>
+        <li>Human-in-the-loop tile correction that feeds the BERT tagger's
+          training set (step 3 of the RAVEN process, made persistent).</li>
+        <li>Per-span confidence scores surfaced in the tiling view.</li>
+        <li>Additional language templates.</li>
+      </ul></div>
+    </div>
+  </section>
+
+  <section class="card" id="f-connect">
+    <h2><span class="fname">2 · Find connections in a set</span>
+        <span class="status st-stable">Stable</span></h2>
+    <p class="lead">Links requirements that share a similar SUBJECT or OBJECT
+      phrase; rendered as the interactive force-directed entity graph.</p>
+    <div class="tri">
+      <div class="c-lim"><h3>Constraints</h3><ul>
+        <li><b>Lexical similarity misses synonyms</b> ("car" vs "vehicle" won't
+          link without the embedding backend).</li>
+        <li>Pairwise scoring is O(n²) — instant for hundreds of requirements,
+          slow beyond a few thousand.</li>
+        <li>The threshold is a manual dial; there is no auto-calibration.</li>
+      </ul></div>
+      <div class="c-wk"><h3>Workarounds</h3><ul>
+        <li>Install the <code>ml</code> extra and switch similarity to
+          <b>BERT embedding</b> for synonym-aware linking.</li>
+        <li>Lower the threshold to 0.3–0.4 to surface looser candidates, then
+          judge them in the match table.</li>
+        <li>Split very large sets by subsystem before linking.</li>
+      </ul></div>
+      <div class="c-fp"><h3>Planned</h3><ul>
+        <li>Approximate-nearest-neighbour index so 10k+ sets stay interactive.</li>
+        <li>Project glossary / synonym dictionary that boosts domain terms.</li>
+        <li>Cluster view: group requirements by shared entity automatically.</li>
+      </ul></div>
+    </div>
+  </section>
+
+  <section class="card" id="f-import">
+    <h2><span class="fname">3 · Import &amp; analyze a set</span>
+        <span class="status st-stable">Stable</span></h2>
+    <p class="lead">CSV / Excel / JSON / ReqIF import with metadata columns,
+      quality table, entity graph, and CSV/JSON/GraphML/Turtle/Cypher exports.</p>
+    <div class="tri">
+      <div class="c-lim"><h3>Constraints</h3><ul>
+        <li><b>ReqIF subset:</b> string attributes only — enumeration values and
+          XHTML-formatted text are not decoded.</li>
+        <li>Excel needs the <code>io</code> extra (pandas + openpyxl).</li>
+        <li>Everything is processed in one request in memory — a very large
+          document blocks the single request thread.</li>
+        <li><b>No persistence:</b> refresh the page and the analysis is gone.</li>
+      </ul></div>
+      <div class="c-wk"><h3>Workarounds</h3><ul>
+        <li>Export enum/XHTML columns as plain strings before import (most RM
+          tools can).</li>
+        <li>Download every artifact (CSV, JSON, GraphML…) immediately — they are
+          the persistent record.</li>
+        <li>Split documents &gt; a few thousand requirements into batches.</li>
+      </ul></div>
+      <div class="c-fp"><h3>Planned</h3><ul>
+        <li>Full ReqIF datatype support incl. XHTML and enumerations.</li>
+        <li>Async processing with a progress bar for large documents.</li>
+        <li>Project save/load (SQLite) so sessions survive a refresh.</li>
+        <li>Direct DOORS / Polarion / Jama connectors.</li>
+      </ul></div>
+    </div>
+  </section>
+
+  <section class="card" id="f-v2">
+    <h2><span class="fname">4 · Compare a SysML v2 model</span>
+        <span class="status st-beta">Beta</span></h2>
+    <p class="lead">Role-bucketed semantic match between SysML v2 textual
+      notation and the requirement set: coverage both ways + gap lists.</p>
+    <div class="tri">
+      <div class="c-lim"><h3>Constraints</h3><ul>
+        <li><b>Textual notation only</b> — no KerML interchange or SysML v2 API
+          model-server access.</li>
+        <li>The regex parser reads the common constructs (part/action/state/
+          port/attribute/requirement); advanced ones (variant modeling,
+          calc defs, allocations) are skipped.</li>
+        <li>Matching is name-based — shallower than the v1 path's neighborhood
+          context.</li>
+      </ul></div>
+      <div class="c-wk"><h3>Workarounds</h3><ul>
+        <li>For deeper matching, export the model as Turtle/RDF and use the
+          <b>SysML v1 card</b> — its context-aware scorer works on any KG.</li>
+        <li>Keep element names descriptive; the score follows the words.</li>
+      </ul></div>
+      <div class="c-fp"><h3>Planned</h3><ul>
+        <li>SysML v2 API/REST client — compare straight from a model server.</li>
+        <li>Port the v1 neighborhood-context scoring to the v2 path.</li>
+        <li>Feed embedded <code>requirement</code> blocks into the RVTM.</li>
+      </ul></div>
+    </div>
+  </section>
+
+  <section class="card" id="f-v1">
+    <h2><span class="fname">5 · Compare SysML v1 — XMI / Turtle / Cameo .mdzip</span>
+        <span class="status st-beta">Beta</span></h2>
+    <p class="lead">Context-aware comparison (BFS neighborhood + satisfy bonus),
+      ontology diff, KG exports, direct <code>.mdzip</code> upload, and
+      custom-profile stereotype import with an override map.</p>
+    <div class="tri">
+      <div class="c-lim"><h3>Constraints</h3><ul>
+        <li><b>.mdzip extraction is validated on synthetic archives</b>
+          (standard <code>uml_model.model</code> layout + XML sniffing) — real
+          Cameo exports vary by version and may hit edge cases.</li>
+        <li>No size cap on archive members yet — a pathological zip could
+          exhaust memory (run locally, trusted files only).</li>
+        <li>Custom stereotypes are routed to roles by <b>name heuristics</b>;
+          profile generalisation chains (e.g. <code>ECU ◁ Block</code>) are not
+          followed because the profile usually lives in a separate module.</li>
+        <li>Turtle input needs <code>rdflib</code>; context building slows on
+          very large models at 3 hops.</li>
+      </ul></div>
+      <div class="c-wk"><h3>Workarounds</h3><ul>
+        <li>Pin ambiguous stereotypes exactly with the <b>“Map your company
+          profile”</b> box (GUI) or <code>--stereotype-map</code> (CLI).</li>
+        <li>If a specific .mdzip fails, export XMI from Cameo
+          (<i>File → Export → Eclipse UML2 XMI</i>) and use the XMI tab.</li>
+        <li>Reduce <b>context hops</b> to 1 for big models.</li>
+      </ul></div>
+      <div class="c-fp"><h3>Planned</h3><ul>
+        <li>Profile-definition ingestion: resolve custom-stereotype inheritance
+          automatically when the profile module is supplied.</li>
+        <li>Validation pass against real Cameo exports across versions +
+          extraction size caps (zip-bomb guard).</li>
+        <li>Incremental parsing for very large models.</li>
+      </ul></div>
+    </div>
+  </section>
+
+  <section class="card" id="f-rvtm">
+    <h2><span class="fname">Certification traceability (RVTM)</span>
+        <span class="status st-heur">Heuristic — engineer confirms</span></h2>
+    <p class="lead">Per-requirement Verified / Candidate / Gap trace status,
+      IADT verification-method suggestion, findings list, CSV / Markdown /
+      GraphML export.</p>
+    <div class="tri">
+      <div class="c-lim"><h3>Constraints</h3><ul>
+        <li><b>Verified requires exact requirement IDs in the model.</b> By
+          design, fuzzy text can never produce Verified — no IDs means no
+          Verified rows, ever.</li>
+        <li>The IADT method (Test/Analysis/Demonstration/Inspection) is a
+          keyword heuristic — a suggestion, not a verdict.</li>
+        <li>RAVEN is <b>not a qualified tool</b> (no DO-330 / tool-qualification
+          pedigree); its outputs are engineering evidence, not certification
+          credit by themselves.</li>
+        <li>Exports carry no signature or audit trail.</li>
+      </ul></div>
+      <div class="c-wk"><h3>Workarounds</h3><ul>
+        <li>Make sure model requirements carry the same IDs as the requirement
+          set — that single discipline unlocks auditable Verified rows.</li>
+        <li>Treat <b>Candidate</b> rows as your review queue; confirm or reject
+          them in your RM tool.</li>
+        <li>Feed the RVTM CSV into your existing signed QA/CM process.</li>
+      </ul></div>
+      <div class="c-fp"><h3>Planned</h3><ul>
+        <li>Human-in-the-loop review: confirm/reject Candidates in the GUI and
+          persist the decision (Candidate → Confirmed).</li>
+        <li>Baselining + delta RVTM between model versions.</li>
+        <li>Signed/checksummed RVTM exports for evidence packages.</li>
+      </ul></div>
+    </div>
+  </section>
+
+  <section class="card" id="f-graph">
+    <h2><span class="fname">Force-directed entity graph</span>
+        <span class="status st-stable">Stable</span></h2>
+    <p class="lead">Dependency-free physics layout of subject/object phrases
+      with live view controls (colour-by, role filters, similarity floor,
+      linked-only, labels).</p>
+    <div class="tri">
+      <div class="c-lim"><h3>Constraints</h3><ul>
+        <li>O(n²) simulation and SVG rendering — smooth to a few hundred nodes,
+          not thousands.</li>
+        <li>Labels can overlap in dense clusters.</li>
+        <li>No image export of the graph itself yet.</li>
+      </ul></div>
+      <div class="c-wk"><h3>Workarounds</h3><ul>
+        <li>Use <b>linked-only</b> + a higher <b>min similarity</b> to thin
+          dense graphs; drag nodes apart and pin them.</li>
+        <li>Toggle labels off for overview, hover for details.</li>
+      </ul></div>
+      <div class="c-fp"><h3>Planned</h3><ul>
+        <li>Canvas/WebGL renderer for thousands of nodes.</li>
+        <li>Cluster collapsing (one node per entity group).</li>
+        <li>PNG/SVG export of the current view.</li>
+      </ul></div>
+    </div>
+  </section>
+
+  <section class="card" id="f-backends">
+    <h2><span class="fname">Extraction backends (rules / spaCy / BERT)</span>
+        <span class="status st-stable">Stable</span></h2>
+    <p class="lead">Pluggable role extraction: zero-dependency rules (default),
+      spaCy grammar, or a trainable BERT token tagger.</p>
+    <div class="tri">
+      <div class="c-lim"><h3>Constraints</h3><ul>
+        <li>spaCy and BERT are optional installs (<code>nlp</code> /
+          <code>ml</code> extras) — greyed out until installed.</li>
+        <li>The BERT tagger ships untrained; you must train it on your own
+          labelled requirements (<code>reqgraph train</code>).</li>
+        <li>Inference on CPU is slower for large batches.</li>
+      </ul></div>
+      <div class="c-wk"><h3>Workarounds</h3><ul>
+        <li>The rules backend is always available and is the tested default.</li>
+        <li>Train once on a few hundred labelled requirements; the tagger
+          persists to a directory you can reuse via <code>--model</code>.</li>
+      </ul></div>
+      <div class="c-fp"><h3>Planned</h3><ul>
+        <li>A pre-trained aerospace/automotive tagger shipped as a download.</li>
+        <li>ONNX export for lighter, faster inference without torch.</li>
+      </ul></div>
+    </div>
+  </section>
+
+  <section class="card prod" id="f-platform">
+    <h2><span class="fname">Platform &amp; the path to production</span>
+        <span class="status st-beta">Local-first by design</span></h2>
+    <p class="lead">Today RAVEN is a <b>local, offline, single-user</b> tool: a
+      stdlib HTTP server bound to 127.0.0.1 serving one self-contained page.
+      That is a feature for confidentiality (requirements never leave your
+      machine) — and a constraint for teams.</p>
+    <div class="tri">
+      <div class="c-lim"><h3>Constraints</h3><ul>
+        <li>No authentication, HTTPS, rate limiting, or multi-user state — it
+          must not be exposed beyond localhost as-is.</li>
+        <li>Blocking request handling: one heavy comparison stalls the UI.</li>
+        <li>No database — nothing persists between sessions.</li>
+        <li>The frontend is one large HTML file — fine to ship, harder to
+          extend.</li>
+        <li>No upload size limits or archive extraction caps.</li>
+      </ul></div>
+      <div class="c-wk"><h3>Workarounds</h3><ul>
+        <li>Run per-user locally (<code>launch_raven.bat</code> /
+          <code>python -m reqgraph gui</code>) — the current supported mode.</li>
+        <li>Use the <b>CLI</b> for batch/CI jobs (<code>export</code>,
+          <code>compare</code>, <code>compare-v1 --rvtm</code>) — it is fully
+          scriptable and needs no server.</li>
+        <li>Keep artifacts (CSV/GraphML/Turtle) in your VCS as the durable
+          record.</li>
+      </ul></div>
+      <div class="c-fp"><h3>Planned — production architecture</h3><ul>
+        <li><b>API service:</b> FastAPI + uvicorn, pydantic-validated requests,
+          OpenAPI docs; current pure functions (<code>parse_request</code>,
+          <code>compare_v1_request</code>…) become the service layer unchanged.</li>
+        <li><b>Jobs:</b> background workers + progress events for BERT and large
+          comparisons.</li>
+        <li><b>Persistence:</b> SQLite→Postgres for projects, sets, review
+          decisions, RVTM baselines.</li>
+        <li><b>Security:</b> OIDC login, per-project authz, upload/zip caps,
+          CSP; audit log for certification workflows.</li>
+        <li><b>Delivery:</b> Dockerfile + compose, GitHub Actions CI (pytest,
+          lint, coverage), versioned PyPI releases.</li>
+      </ul></div>
+    </div>
+  </section>
+
+</main>
+</body>
+</html>

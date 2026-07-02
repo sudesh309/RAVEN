@@ -851,12 +851,17 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    # explicit whitelist — never serve arbitrary paths from disk
+    _PAGES = {"/": "index.html", "/index.html": "index.html",
+              "/roadmap.html": "roadmap.html"}
+
     def do_GET(self):
-        if self.path in ("/", "/index.html"):
+        if self.path in self._PAGES:
+            page = self._PAGES[self.path]
             try:
-                body = (_STATIC_DIR / "index.html").read_bytes()
+                body = (_STATIC_DIR / page).read_bytes()
             except OSError:
-                self.send_error(500, "static/index.html missing")
+                self.send_error(500, f"static/{page} missing")
                 return
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")

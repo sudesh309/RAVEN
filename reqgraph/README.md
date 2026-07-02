@@ -752,6 +752,15 @@ re-querying the backend:
 
 a live legend tracks the current colour scheme and the visible node/link count.
 
+### Constraints & roadmap page
+
+The header links to **`/roadmap.html`** — a separate page listing, for every
+feature, its honest **constraints** (what it cannot do today and why), the
+**workarounds** available right now inside the tool, and the **planned** fix,
+plus the recommended production architecture (FastAPI service layer, job queue,
+persistence, auth, packaging). Status chips mark each feature as *Stable*,
+*Beta*, or *Heuristic — engineer confirms*.
+
 The same `{nodes, edges}` data is available programmatically in the
 `/api/connections` and `/api/export` responses under the `entities` key.
 
