@@ -9,6 +9,9 @@ analysis, duplicate/conflict detection, and CSV/Excel/ReqIF batch I/O.
 [`docs/MANUAL.md`](docs/MANUAL.md)
 🏗️ **Architecture & function-level data flow:**
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+🎯 **CTO pitch deck (7 slides — personas, toolchain integration, AI/GCP roadmap):**
+[`../docs/RAVEN_CTO_deck.html`](../docs/RAVEN_CTO_deck.html) — open in a browser,
+arrow keys to navigate, Ctrl+P for PDF
 
 Install (editable, with console script):
 ```bash
