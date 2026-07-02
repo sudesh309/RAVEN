@@ -337,6 +337,61 @@ def parse_request(state: GuiState, payload: dict) -> dict:
     return out
 
 
+def _entity_graph(rsg) -> dict:
+    """Build an element-level (subject/object) graph for force-directed display.
+
+    Nodes are the individual SUBJECT and OBJECT phrases extracted from every
+    requirement (the *entities* a requirement set talks about). Edges are the
+    cross-requirement similarity links between two phrases that share the same
+    role. Phrases that never link still appear as nodes, so the picture shows
+    both the shared vocabulary and the isolated terms.
+
+    Returns ``{"nodes": [...], "edges": [...]}`` — a stable shape the browser
+    renders with its force simulation. Node ``id`` is ``"{req}\\u241f{role}\\u241f{text}"``
+    so an edge can be keyed back to the exact phrase it connects.
+    """
+    SEP = "␟"  # symbol-for-unit-separator: unlikely to occur in a phrase
+
+    def _key(req_id, role, text):
+        return f"{req_id}{SEP}{role}{SEP}{text.strip()}"
+
+    nodes: dict[str, dict] = {}
+    degree: dict[str, int] = {}
+    for rid in rsg.req_ids:
+        g = rsg.graphs[rid]
+        for n in g.elements():
+            role = n.role.value
+            if role not in ("SUBJECT", "OBJECT"):
+                continue
+            text = n.text.strip()
+            if not text:
+                continue
+            k = _key(rid, role, text)
+            if k not in nodes:
+                nodes[k] = {"id": k, "label": text, "role": role, "req": rid}
+                degree[k] = 0
+
+    edges = []
+    for c in rsg._dedup_pairs():
+        role = c.role.value
+        if role not in ("SUBJECT", "OBJECT"):
+            continue
+        s = _key(c.a.req_id, role, c.a.text)
+        t = _key(c.b.req_id, role, c.b.text)
+        # both endpoints must be known phrase nodes
+        if s not in nodes or t not in nodes or s == t:
+            continue
+        edges.append({"source": s, "target": t, "role": role,
+                      "score": round(c.score, 4)})
+        degree[s] = degree.get(s, 0) + 1
+        degree[t] = degree.get(t, 0) + 1
+
+    for k, node in nodes.items():
+        node["degree"] = degree.get(k, 0)
+
+    return {"nodes": list(nodes.values()), "edges": edges}
+
+
 def connections_request(state: GuiState, payload: dict) -> dict:
     """Handle one /api/connections payload: a requirement *set* in, a
     per-requirement breakdown plus the cross-requirement SUBJECT/OBJECT
@@ -357,6 +412,7 @@ def connections_request(state: GuiState, payload: dict) -> dict:
              "score": round(c.score, 4), "text_a": c.a.text, "text_b": c.b.text}
             for c in rsg._dedup_pairs()
         ],
+        "entities": _entity_graph(rsg),
         "n_requirements": len(rsg.req_ids),
         "n_connections": len(rsg.connections),
         "mermaid": rsg.to_mermaid(),
@@ -440,6 +496,7 @@ def export_request(state: GuiState, payload: dict) -> dict:
              "score": round(c.score, 4), "text_a": c.a.text, "text_b": c.b.text}
             for c in rsg._dedup_pairs()
         ],
+        "entities": _entity_graph(rsg),
         "n_requirements": len(rsg.req_ids),
         "n_connections": len(rsg.connections),
         "mermaid": rsg.to_mermaid(),
@@ -549,6 +606,32 @@ def compare_request(state: GuiState, payload: dict) -> dict:
     return result
 
 
+_ROLE_NAMES = {"SUBJECT", "OBJECT", "PROCESS", "CONDITION", "ACTOR",
+               "CONSTRAINT", "MODALITY", "OPERATOR", "DETAILS", "ROOT", "GLUE"}
+
+
+def _split_stereotype_map(raw):
+    """Split a stereotype-map payload into (roles, relations) dicts.
+
+    Accepts either an explicit ``{"roles": {...}, "relations": {...}}`` shape,
+    or a flat ``{"Stereotype": "VALUE"}`` map where a value naming a known IREB
+    role is treated as a role mapping and anything else as a relation mapping.
+    """
+    if not isinstance(raw, dict) or not raw:
+        return None, None
+    if "roles" in raw or "relations" in raw:
+        roles = raw.get("roles") if isinstance(raw.get("roles"), dict) else {}
+        rels = raw.get("relations") if isinstance(raw.get("relations"), dict) else {}
+        return (roles or None), (rels or None)
+    roles, rels = {}, {}
+    for k, v in raw.items():
+        if isinstance(v, str) and v.strip().upper() in _ROLE_NAMES:
+            roles[k] = v.strip().upper()
+        else:
+            rels[k] = v
+    return (roles or None), (rels or None)
+
+
 def compare_v1_request(state: GuiState, payload: dict) -> dict:
     """Handle one /api/compare-v1 payload.
 
@@ -578,7 +661,7 @@ def compare_v1_request(state: GuiState, payload: dict) -> dict:
     template / backend : str, optional
         Requirement parsing template / extraction backend.
     """
-    from .sysml_v1_parser import parse_sysml_v1
+    from .sysml_v1_parser import parse_sysml_v1, parse_mdzip
     from .sysml_v1_compare import compare_v1 as _compare_v1
 
     model_content = payload.get("model_content", "")
@@ -586,19 +669,37 @@ def compare_v1_request(state: GuiState, payload: dict) -> dict:
 
     if not model_content or not str(model_content).strip():
         raise ReqGraphError(
-            "please paste a SysML v1 XMI or Turtle model in the left panel")
+            "please provide a SysML v1 model — paste XMI/Turtle, or upload a "
+            "Cameo .mdzip in the left panel")
     if not req_content or not str(req_content).strip():
         raise ReqGraphError(
             "please paste requirements (one per line, or CSV/JSON) in the right panel")
 
     warnings: list = []
 
-    # Parse the SysML v1 model (honor the format hint from the XMI/Turtle tab;
-    # falls back to content auto-detection when the hint is absent/invalid)
+    # Optional custom-stereotype override maps (company SysML profile):
+    # payload may carry {"stereotype_map": {"roles": {...}, "relations": {...}}}
+    # or a flat {"SafetyRequirement": "CONSTRAINT", "verifies": "satisfy"} map.
+    stereo_roles, stereo_rels = _split_stereotype_map(payload.get("stereotype_map"))
+
+    # Parse the SysML v1 model (honor the format hint from the XMI/Turtle/mdzip
+    # tab; falls back to content auto-detection when the hint is absent/invalid)
     model_fmt = (payload.get("model_format") or "").lower().strip()
+    model_enc = (payload.get("model_encoding") or "").lower().strip()
     try:
-        model = parse_sysml_v1(str(model_content), source_path="<pasted model>",
-                               fmt=model_fmt or None)
+        if model_fmt == "mdzip" or model_enc == "base64":
+            import base64
+            blob = str(model_content)
+            raw = blob.split(",", 1)[1] if "," in blob else blob
+            data = base64.b64decode(raw)
+            model = parse_mdzip(data, source_path="<uploaded.mdzip>",
+                                stereotype_roles=stereo_roles,
+                                stereotype_relations=stereo_rels)
+        else:
+            model = parse_sysml_v1(str(model_content), source_path="<pasted model>",
+                                   fmt=model_fmt or None,
+                                   stereotype_roles=stereo_roles,
+                                   stereotype_relations=stereo_rels)
     except Exception as exc:
         raise ReqGraphError(f"could not parse SysML v1 model: {exc}") from exc
 

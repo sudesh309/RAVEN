@@ -401,9 +401,12 @@ def build_traceability_matrix(
     for rid in rsg.req_ids:
         enrich(rsg.graphs[rid])
 
-    # 2. index model requirements + explicit trace links
+    # 2. index model requirements + explicit trace links. A model requirement is
+    #    any element whose stereotype names a requirement (standard "Requirement"
+    #    or a custom-profile one like "SafetyRequirement"), or that carries a
+    #    requirement id captured from its stereotype application.
     model_reqs = [e for e in model.elements
-                  if e.stereotype.lower() == "requirement"]
+                  if "requirement" in e.stereotype.lower() or e.req_id]
     by_id = {_norm_id(e.req_id): e for e in model_reqs if e.req_id}
     elem_by_xid = {e.xmi_id: e for e in model.elements if e.xmi_id}
 

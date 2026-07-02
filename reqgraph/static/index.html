@@ -126,6 +126,52 @@
   .graph-legend .ll{display:flex;align-items:center;gap:5px}
   .graph-legend .dot{width:10px;height:10px;border-radius:50%}
   .graph-legend .ln{width:18px;height:3px;border-radius:2px}
+  /* force-directed entity graph (subjects & objects) */
+  .fg-wrap{position:relative;border:1px solid var(--border);border-radius:12px;
+    background:radial-gradient(circle at 1px 1px,#e9e8f3 1px,transparent 0) 0 0/22px 22px,
+      linear-gradient(180deg,#fbfbfe,#f4f3fb);overflow:hidden;height:460px;
+    user-select:none;touch-action:none}
+  .fg-wrap svg{display:block;width:100%;height:100%;cursor:grab}
+  .fg-wrap svg.panning{cursor:grabbing}
+  .fg-toolbar{position:absolute;top:10px;right:10px;display:flex;gap:6px;z-index:3}
+  .fg-toolbar button{font:inherit;font-size:12px;width:30px;height:30px;
+    border-radius:8px;border:1px solid var(--border);background:#fffe;cursor:pointer;
+    color:var(--muted);font-weight:600;display:flex;align-items:center;justify-content:center}
+  .fg-toolbar button:hover{border-color:var(--accent);color:var(--accent)}
+  .fg-hint{position:absolute;left:12px;bottom:10px;font-size:11px;color:var(--muted);
+    background:#fffd;border:1px solid var(--border);border-radius:7px;padding:3px 9px;z-index:3}
+  .fg-link{stroke-linecap:round;transition:stroke-opacity .12s}
+  .fg-node circle{cursor:pointer;stroke:#fff;stroke-width:1.5;transition:opacity .12s}
+  .fg-node text{font-size:11px;fill:#33323a;paint-order:stroke;
+    stroke:#fbfbfe;stroke-width:3px;pointer-events:none;transition:opacity .12s}
+  .fg-node.pinned circle{stroke:#2c2c2a;stroke-width:2.5;stroke-dasharray:2 2}
+  .fg-empty{display:flex;align-items:center;justify-content:center;height:100%;
+    color:var(--muted);font-size:13px;text-align:center;padding:0 24px}
+  /* dynamic view controls above each force graph */
+  .fg-controls{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;
+    padding:9px 12px;margin-bottom:8px;border:1px solid var(--border);
+    border-radius:10px;background:linear-gradient(180deg,#fcfcff,#f5f4fb);font-size:12px}
+  .fg-cg{display:flex;align-items:center;gap:7px}
+  .fg-cg>label{color:var(--muted);font-weight:600;white-space:nowrap}
+  .fg-cg select{font:inherit;font-size:12px;border:1px solid var(--border);
+    border-radius:7px;padding:3px 6px;background:#fff;color:var(--text)}
+  .fg-cg input[type=range]{width:96px;accent-color:var(--accent)}
+  .fg-cg b{color:var(--accent);min-width:30px;display:inline-block}
+  .fg-check{display:flex;align-items:center;gap:5px;color:var(--text);
+    font-weight:400;cursor:pointer;text-transform:none}
+  .fg-chip{display:inline-flex;align-items:center;gap:5px;font:inherit;font-size:12px;
+    border:1.5px solid var(--border);background:#fff;color:var(--muted);
+    border-radius:99px;padding:3px 11px;cursor:pointer;transition:.12s}
+  .fg-chip i{width:9px;height:9px;border-radius:50%;display:inline-block;opacity:.35;transition:.12s}
+  .fg-chip.on{border-color:var(--accent);color:var(--text);font-weight:600;background:var(--accent-soft)}
+  .fg-chip.on i{opacity:1}
+  .fg-chip:not(.on){text-decoration:line-through;opacity:.6}
+  .fg-legend{display:flex;flex-wrap:wrap;gap:5px 12px;align-items:center;
+    margin-left:auto;color:var(--muted)}
+  .fg-legend .fg-sw{display:inline-flex;align-items:center;gap:5px}
+  .fg-legend .fg-sw i{width:10px;height:10px;border-radius:3px;display:inline-block}
+  .fg-legend .fg-count{font-weight:600;color:var(--text);
+    border-left:1px solid var(--border);padding-left:12px}
   /* compare model vs requirements */
   #cmp-error{display:none;background:var(--bad-soft);color:var(--bad);
     border:1px solid #f0c0c0;border-radius:8px;padding:9px 13px;font-size:14px}
@@ -478,7 +524,19 @@
         <button class="ghost" onclick="dlSet('cypher')">Cypher</button>
       </div>
     </div>
-    <div id="connwrap"><svg id="conngraph"></svg></div>
+    <div class="graph-legend">
+      <span class="ll" style="color:var(--muted)">Use the controls to recolour and
+        filter · drag a node to pin · scroll to zoom · drag canvas to pan</span>
+    </div>
+    <div class="fg-wrap" id="conn-fg">
+      <div class="fg-toolbar">
+        <button title="zoom in"  onclick="connFG&&connFG.zoom(1.25)">+</button>
+        <button title="zoom out" onclick="connFG&&connFG.zoom(0.8)">&minus;</button>
+        <button title="fit to view" onclick="connFG&&connFG.fit()">&#9635;</button>
+      </div>
+      <span class="fg-hint">force-directed entity graph</span>
+      <svg id="conngraph"></svg>
+    </div>
     <table style="margin-top:14px"><thead><tr>
         <th>Requirement A</th><th style="width:90px">Role</th><th>Match</th>
         <th>Requirement B</th><th style="width:70px">Score</th>
@@ -514,6 +572,13 @@
             <option value="csv">CSV (with header row)</option>
             <option value="json">JSON</option>
             <option value="reqif">ReqIF (XML)</option>
+          </select></div>
+        <div class="ctl"><label for="exp-example">Example</label>
+          <select id="exp-example" title="load a worked example for any format">
+            <option value="csv">CSV — with rationale column</option>
+            <option value="lines">Plain text — one per line</option>
+            <option value="json">JSON — array of objects</option>
+            <option value="reqif">ReqIF — XML interchange</option>
           </select></div>
       </div>
       <textarea id="exp-text" spellcheck="false" style="min-height:130px"
@@ -567,14 +632,19 @@
     </div>
     <div id="exp-summary" style="margin:6px 0 12px;color:var(--muted);font-size:13px"></div>
     <div class="graph-legend" id="exp-graph-legend">
-      <span class="ll"><span class="dot" style="background:var(--ok)"></span>clean</span>
-      <span class="ll"><span class="dot" style="background:#E5A020"></span>weak words</span>
-      <span class="ll"><span class="dot" style="background:var(--bad)"></span>non-atomic</span>
-      <span class="ll"><span class="ln" style="background:#185FA5"></span>shared SUBJECT</span>
-      <span class="ll"><span class="ln" style="background:#0F6E56"></span>shared OBJECT</span>
-      <span class="ll" style="color:var(--muted)">thicker line = stronger match</span>
+      <span class="ll" style="color:var(--muted)">Bigger node = more links · thicker
+        line = stronger match · use the controls to recolour &amp; filter ·
+        drag to pin · scroll to zoom</span>
     </div>
-    <div id="exp-connwrap"><svg id="exp-conngraph"></svg></div>
+    <div class="fg-wrap" id="exp-fg">
+      <div class="fg-toolbar">
+        <button title="zoom in"  onclick="expFG&&expFG.zoom(1.25)">+</button>
+        <button title="zoom out" onclick="expFG&&expFG.zoom(0.8)">&minus;</button>
+        <button title="fit to view" onclick="expFG&&expFG.fit()">&#9635;</button>
+      </div>
+      <span class="fg-hint">force-directed entity graph</span>
+      <svg id="exp-conngraph"></svg>
+    </div>
     <div style="overflow-x:auto">
       <table id="exp-table">
         <thead id="exp-thead"></thead>
@@ -656,6 +726,8 @@
           <label style="font-size:13px;display:flex;gap:5px;align-items:center;text-transform:none;font-weight:400"><input type="checkbox" id="cmp-role-condition" checked> CONDITION</label>
         </div>
       </div>
+      <button class="ghost" id="cmp-example" style="align-self:flex-end"
+        title="Fill both panels with a worked example and run it">Load example</button>
       <button class="primary" id="cmp-btn" style="align-self:flex-end">Compare &rarr;</button>
     </div>
     <details class="paramhelp">
@@ -734,12 +806,21 @@
     <div style="display:flex;gap:8px;margin-bottom:8px;">
       <button class="tab-btn active" id="v1-tab-xmi" onclick="v1SetFmt('xmi')">XMI / XML</button>
       <button class="tab-btn" id="v1-tab-ttl" onclick="v1SetFmt('turtle')">Turtle / RDF</button>
+      <button class="tab-btn" id="v1-tab-mdzip" onclick="v1SetFmt('mdzip')">Cameo .mdzip</button>
     </div>
 
     <div class="cmp-two-col">
       <div style="display:flex;flex-direction:column;gap:6px;flex:1">
         <label for="v1-model"><b>SysML v1 model</b></label>
         <textarea id="v1-model" rows="14" placeholder="Paste XMI or Turtle here…"></textarea>
+        <div id="v1-mdzip-pane" style="display:none">
+          <input type="file" id="v1-mdzip-file" accept=".mdzip,.zip"
+                 style="font:inherit;cursor:pointer">
+          <div class="hint" style="display:block;margin-top:6px">
+            Upload a <b>Cameo / MagicDraw .mdzip</b> — the UML model is extracted
+            from the archive and compared. <span id="v1-mdzip-name"></span>
+          </div>
+        </div>
       </div>
       <div style="display:flex;flex-direction:column;gap:6px;flex:1">
         <label for="v1-reqs">
@@ -783,6 +864,20 @@
         title="Fill both panels with a small worked example and run it">Load worked example</button>
       <button class="primary" id="v1-btn" style="align-self:flex-end">Compare v1 &rarr;</button>
     </div>
+
+    <details class="paramhelp" style="margin-top:8px">
+      <summary>Custom stereotypes? Map your company profile</summary>
+      <p style="font-size:.85rem;margin:6px 0">
+        If your model uses custom-profile stereotypes (e.g. a <code>SafetyRequirement</code>
+        block or a custom <code>verifies</code> relation), map each one to an IREB
+        <b>role</b> (SUBJECT / OBJECT / PROCESS / CONDITION / ACTOR / CONSTRAINT) or a
+        trace <b>verb</b> (satisfy / derive / refine / trace / allocate). One mapping per
+        line — custom stereotypes are auto-detected, this just pins ambiguous ones.
+      </p>
+      <textarea id="v1-stereo-map" rows="3" spellcheck="false"
+        style="width:100%;font-family:ui-monospace,monospace;font-size:12px"
+        placeholder="SafetyRequirement = CONSTRAINT&#10;ECU = SUBJECT&#10;verifies = satisfy"></textarea>
+    </details>
 
     <details style="margin-top:8px">
       <summary style="cursor:pointer;color:var(--accent);font-size:.85rem">How context hops work</summary>
@@ -978,6 +1073,12 @@ async function boot(){
   $("text").value = EXAMPLES[0];
   renderConfigInfo();
   parse();
+  // now that the template/backend selectors are populated, run the worked
+  // example pre-loaded into every other section so each one shows live output
+  parseSet();
+  parseExport();
+  parseCompare();
+  v1LoadExample();
 }
 
 function renderConfigInfo(){
@@ -1088,6 +1189,388 @@ function renderTiles(tiles){
 
 function esc(s){ s=String(s||""); return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
 
+/* ── ForceGraph — self-contained force-directed entity graph ──────────────
+ * Renders a {nodes, edges} graph for subjects/objects with a live force
+ * simulation (charge repulsion + link springs + centering), draggable
+ * pin-able nodes, wheel zoom and canvas pan. Zero dependencies, offline-safe.
+ */
+const SVGNS = "http://www.w3.org/2000/svg";
+class ForceGraph {
+  constructor(svg){
+    this.svg = svg;
+    this.view = document.createElementNS(SVGNS, "g");
+    this.linkG = document.createElementNS(SVGNS, "g");
+    this.nodeG = document.createElementNS(SVGNS, "g");
+    this.view.append(this.linkG, this.nodeG);
+    this.t = {x:0, y:0, k:1};
+    this.nodes = []; this.links = [];
+    this.alpha = 0; this.running = false; this._raf = null;
+    this.hover = null;
+    // dynamic view state — driven by the controls bar
+    this.colorMode = "role";                       // "role" | "req"
+    this.showRoles = {SUBJECT:true, OBJECT:true};
+    this.minScore = 0;                             // hide weaker links
+    this.connectedOnly = false;                    // hide isolated phrases
+    this.showLabels = true;
+    this._legendEl = null;
+    this._wireGestures();
+  }
+  static ROLE_COL = {SUBJECT:"#2E78C8", OBJECT:"#159170"};
+  static LINK_COL = {SUBJECT:"#185FA5", OBJECT:"#0F6E56"};
+  _size(){
+    const r = this.svg.getBoundingClientRect();
+    this.W = r.width || 800; this.H = r.height || 460;
+  }
+  setData(graph){
+    this._size();
+    const W = this.W, H = this.H;
+    // build node objects with seeded-ish initial positions on a spiral
+    const idx = new Map();
+    this.nodes = (graph.nodes || []).map((n, i) => {
+      const a = i * 2.399963, rr = 12 * Math.sqrt(i + 1);   // golden-angle spread
+      const o = {...n, x: W/2 + rr*Math.cos(a), y: H/2 + rr*Math.sin(a),
+                 vx:0, vy:0, fx:null, fy:null, deg: n.degree || 0};
+      idx.set(o.id, o); return o;
+    });
+    this.links = (graph.edges || []).map(e => ({
+      source: idx.get(e.source), target: idx.get(e.target),
+      role: e.role, score: e.score ?? 0.5,
+    })).filter(l => l.source && l.target);
+    // adjacency for hover highlighting
+    this.adj = new Map(this.nodes.map(n => [n.id, new Set()]));
+    for(const l of this.links){ this.adj.get(l.source.id).add(l.target.id);
+                                this.adj.get(l.target.id).add(l.source.id); }
+    // assign a stable colour per source requirement (for "colour by requirement")
+    const reqs = [...new Set(this.nodes.map(n => n.req))];
+    this.reqColors = new Map(reqs.map((r, i) =>
+      [r, `hsl(${Math.round((i * 137.508) % 360)} 60% 47%)`]));
+    this.svg.innerHTML = "";
+    this.svg.appendChild(this.view);
+    this._build();
+    this.t = {x:0, y:0, k:1}; this._applyT();
+    this._fitPending = true;       // fit once the layout settles
+    this.reheat(1);
+  }
+  _build(){
+    this.linkEls = this.links.map(l => {
+      const el = document.createElementNS(SVGNS, "line");
+      el.setAttribute("class", "fg-link");
+      el.setAttribute("stroke", ForceGraph.LINK_COL[l.role] || "#888");
+      el.setAttribute("stroke-width", (0.8 + 3.2 * l.score).toFixed(2));
+      el.setAttribute("stroke-opacity", "0.45");
+      const tt = document.createElementNS(SVGNS, "title");
+      tt.textContent = `${l.role} · similarity ${(+l.score).toFixed(2)}`;
+      el.appendChild(tt);
+      this.linkG.appendChild(el); return el;
+    });
+    this.nodeEls = this.nodes.map(n => {
+      const g = document.createElementNS(SVGNS, "g");
+      g.setAttribute("class", "fg-node");
+      const r = 7 + 2.4 * Math.sqrt(n.deg);
+      n._r = r;
+      const c = document.createElementNS(SVGNS, "circle");
+      c.setAttribute("r", r.toFixed(1));
+      c.setAttribute("fill", this._nodeColor(n));
+      const tt = document.createElementNS(SVGNS, "title");
+      tt.textContent = `${n.role} — "${n.label}"  (${n.req}, ${n.deg} link${n.deg!==1?"s":""})`;
+      c.appendChild(tt);
+      const t = document.createElementNS(SVGNS, "text");
+      t.setAttribute("dx", (r + 3).toFixed(1));
+      t.setAttribute("dy", "4");
+      const lbl = n.label.length > 26 ? n.label.slice(0, 24) + "…" : n.label;
+      t.textContent = lbl;
+      g.append(c, t);
+      this.nodeG.appendChild(g);
+      this._wireNode(g, n);
+      n._g = g; n._c = c; n._t = t;
+      return g;
+    });
+  }
+  /* ── force simulation ── */
+  reheat(a = 0.6){ this.alpha = Math.max(this.alpha, a);
+    if(!this.running){ this.running = true; this._tick(); } }
+  _tick(){
+    this._step();
+    this._draw();
+    this.alpha *= 0.975;
+    this._frames = (this._frames || 0) + 1;
+    // keep the view framed while the layout is still spreading out
+    if(this._fitPending && (this._frames % 18 === 0)) this.fit();
+    if(this.alpha > 0.005){ this._raf = requestAnimationFrame(() => this._tick()); }
+    else {
+      this.running = false;
+      if(this._fitPending){ this.fit(); this._fitPending = false; }
+    }
+  }
+  _step(){
+    const N = this.nodes, W = this.W, H = this.H, a = this.alpha;
+    const CHARGE = -780, LINK = 0.055, LINK_LEN = 110, GRAV = 0.05, DAMP = 0.82;
+    // repulsion (O(n^2) — fine for the sets this tool produces)
+    for(let i=0;i<N.length;i++){
+      const p = N[i]; if(p.hidden) continue;
+      for(let j=i+1;j<N.length;j++){
+        const q = N[j]; if(q.hidden) continue;
+        let dx = p.x-q.x, dy = p.y-q.y, d2 = dx*dx+dy*dy || 0.01;
+        if(d2 > 50000) continue;                 // ignore far pairs (>~224px)
+        const d = Math.sqrt(d2), f = CHARGE / d2 * a;
+        const ux = dx/d, uy = dy/d;
+        p.vx += ux*f; p.vy += uy*f; q.vx -= ux*f; q.vy -= uy*f;
+      }
+    }
+    // link springs
+    for(const l of this.links){
+      if(l.hidden) continue;
+      const s = l.source, t = l.target;
+      let dx = t.x-s.x, dy = t.y-s.y, d = Math.hypot(dx,dy)||0.01;
+      const f = (d - LINK_LEN) * LINK * a * (0.5 + l.score);
+      const ux = dx/d, uy = dy/d;
+      s.vx += ux*f; s.vy += uy*f; t.vx -= ux*f; t.vy -= uy*f;
+    }
+    // centering gravity + integrate
+    for(const p of N){
+      if(p.hidden) continue;
+      p.vx += (W/2 - p.x) * GRAV * a;
+      p.vy += (H/2 - p.y) * GRAV * a;
+      if(p.fx != null){ p.x = p.fx; p.y = p.fy; p.vx = p.vy = 0; continue; }
+      p.vx *= DAMP; p.vy *= DAMP;
+      p.x += p.vx; p.y += p.vy;
+    }
+  }
+  _draw(){
+    for(let i=0;i<this.links.length;i++){
+      const l = this.links[i]; if(l.hidden) continue;
+      const el = this.linkEls[i];
+      el.setAttribute("x1", l.source.x.toFixed(1)); el.setAttribute("y1", l.source.y.toFixed(1));
+      el.setAttribute("x2", l.target.x.toFixed(1)); el.setAttribute("y2", l.target.y.toFixed(1));
+    }
+    for(let i=0;i<this.nodes.length;i++){
+      const n = this.nodes[i]; if(n.hidden) continue;
+      n._g.setAttribute("transform", `translate(${n.x.toFixed(1)},${n.y.toFixed(1)})`);
+    }
+  }
+  /* ── colour + dynamic view filters ── */
+  _nodeColor(n){
+    return this.colorMode === "req"
+      ? (this.reqColors.get(n.req) || "#888")
+      : (ForceGraph.ROLE_COL[n.role] || "#888");
+  }
+  setColorMode(m){
+    this.colorMode = m;
+    for(const n of this.nodes) n._c.setAttribute("fill", this._nodeColor(n));
+    this.renderLegend();
+  }
+  setRole(role, on){ this.showRoles[role] = on; this.applyFilter(); }
+  setMinScore(s){ this.minScore = s; this.applyFilter(); }
+  setConnectedOnly(b){ this.connectedOnly = b; this.applyFilter(); }
+  setLabels(b){
+    this.showLabels = b;
+    for(const n of this.nodes)
+      n._t.style.display = (b && !n.hidden) ? "" : "none";
+  }
+  applyFilter(){
+    // a link survives if it clears the similarity floor and both ends are shown
+    const deg = new Map(this.nodes.map(n => [n.id, 0]));
+    for(let i=0;i<this.links.length;i++){
+      const l = this.links[i];
+      l.hidden = l.score < this.minScore ||
+                 !this.showRoles[l.source.role] || !this.showRoles[l.target.role];
+      if(!l.hidden){ deg.set(l.source.id, deg.get(l.source.id)+1);
+                     deg.set(l.target.id, deg.get(l.target.id)+1); }
+    }
+    for(const n of this.nodes){
+      n.hidden = !this.showRoles[n.role] ||
+                 (this.connectedOnly && deg.get(n.id) === 0);
+      n._g.style.display = n.hidden ? "none" : "";
+      n._t.style.display = (this.showLabels && !n.hidden) ? "" : "none";
+    }
+    for(let i=0;i<this.links.length;i++){
+      const l = this.links[i];
+      this.linkEls[i].style.display =
+        (l.hidden || l.source.hidden || l.target.hidden) ? "none" : "";
+    }
+    this.renderLegend();
+    this._fitPending = true; this.reheat(0.6);
+  }
+  renderLegend(){
+    if(!this._legendEl) return;
+    let html = "";
+    if(this.colorMode === "req"){
+      for(const [r, c] of this.reqColors)
+        html += `<span class="fg-sw"><i style="background:${c}"></i>${esc(r)}</span>`;
+    } else {
+      html = `<span class="fg-sw"><i style="background:${ForceGraph.ROLE_COL.SUBJECT}"></i>subject</span>
+              <span class="fg-sw"><i style="background:${ForceGraph.ROLE_COL.OBJECT}"></i>object</span>`;
+    }
+    const vn = this.nodes.filter(n => !n.hidden).length;
+    const vl = this.links.filter(l => !l.hidden).length;
+    html += `<span class="fg-sw fg-count">${vn} node${vn!==1?"s":""} · ${vl} link${vl!==1?"s":""}</span>`;
+    this._legendEl.innerHTML = html;
+  }
+  /* ── transforms: pan & zoom ── */
+  _applyT(){ this.view.setAttribute("transform",
+    `translate(${this.t.x},${this.t.y}) scale(${this.t.k})`); }
+  zoom(factor, cx, cy){
+    this._fitPending = false;      // user took control of the view
+    this._size();
+    if(cx == null){ cx = this.W/2; cy = this.H/2; }
+    const k2 = Math.min(4, Math.max(0.15, this.t.k * factor));
+    // keep the point under (cx,cy) fixed
+    this.t.x = cx - (cx - this.t.x) * (k2 / this.t.k);
+    this.t.y = cy - (cy - this.t.y) * (k2 / this.t.k);
+    this.t.k = k2; this._applyT();
+  }
+  fit(){
+    if(!this.nodes.length) return;
+    this._size();
+    let minX=1e9,minY=1e9,maxX=-1e9,maxY=-1e9, any=false;
+    for(const n of this.nodes){ if(n.hidden) continue; any=true;
+      minX=Math.min(minX,n.x); minY=Math.min(minY,n.y);
+      maxX=Math.max(maxX,n.x); maxY=Math.max(maxY,n.y); }
+    if(!any) return;
+    const pad = 90, gw = (maxX-minX)||1, gh = (maxY-minY)||1;
+    // cap zoom-in at 1.1× so small graphs aren't blown up into overlap
+    const k = Math.min(1.1, Math.max(0.2,
+      Math.min((this.W-pad)/gw, (this.H-pad)/gh)));
+    this.t.k = k;
+    this.t.x = (this.W - k*(minX+maxX))/2;
+    this.t.y = (this.H - k*(minY+maxY))/2;
+    this._applyT();
+  }
+  _toGraph(ev){
+    const r = this.svg.getBoundingClientRect();
+    return {x:(ev.clientX - r.left - this.t.x)/this.t.k,
+            y:(ev.clientY - r.top  - this.t.y)/this.t.k};
+  }
+  _wireNode(g, n){
+    g.addEventListener("pointerdown", ev => {
+      ev.stopPropagation();
+      this._fitPending = false;
+      g.setPointerCapture(ev.pointerId);
+      const start = this._toGraph(ev);
+      n._drag = {ox: n.x - start.x, oy: n.y - start.y, moved:false};
+      n.fx = n.x; n.fy = n.y;
+      this.reheat(0.5);
+    });
+    g.addEventListener("pointermove", ev => {
+      if(!n._drag) return;
+      const p = this._toGraph(ev);
+      n.fx = p.x + n._drag.ox; n.fy = p.y + n._drag.oy;
+      n._drag.moved = true; this.reheat(0.3);
+    });
+    g.addEventListener("pointerup", ev => {
+      if(!n._drag) return;
+      if(n._drag.moved){ g.classList.add("pinned"); }   // dropped → stays pinned
+      else { n.fx = n.fy = null; g.classList.remove("pinned"); } // click → release
+      n._drag = null;
+    });
+    g.addEventListener("dblclick", ev => {
+      ev.stopPropagation(); n.fx = n.fy = null;
+      g.classList.remove("pinned"); this.reheat(0.5);
+    });
+    g.addEventListener("pointerenter", () => this._highlight(n));
+    g.addEventListener("pointerleave", () => this._highlight(null));
+  }
+  _highlight(n){
+    const on = n ? this.adj.get(n.id) : null;
+    for(const m of this.nodes){
+      if(m.hidden) continue;
+      const dim = n && m.id !== n.id && !on.has(m.id);
+      m._c.style.opacity = dim ? 0.18 : 1;
+      m._t.style.opacity = dim ? 0.12 : 1;
+    }
+    for(let i=0;i<this.links.length;i++){
+      const l = this.links[i]; if(l.hidden) continue;
+      const lit = n && (l.source.id === n.id || l.target.id === n.id);
+      this.linkEls[i].setAttribute("stroke-opacity",
+        n ? (lit ? 0.9 : 0.06) : 0.45);
+    }
+  }
+  _wireGestures(){
+    const svg = this.svg;
+    svg.addEventListener("wheel", ev => {
+      ev.preventDefault();
+      const r = svg.getBoundingClientRect();
+      this.zoom(ev.deltaY < 0 ? 1.12 : 0.89, ev.clientX - r.left, ev.clientY - r.top);
+    }, {passive:false});
+    let pan = null;
+    svg.addEventListener("pointerdown", ev => {
+      if(ev.target.closest(".fg-node")) return;   // node handles its own drag
+      this._fitPending = false;
+      pan = {x: ev.clientX, y: ev.clientY, tx: this.t.x, ty: this.t.y};
+      svg.classList.add("panning"); svg.setPointerCapture(ev.pointerId);
+    });
+    svg.addEventListener("pointermove", ev => {
+      if(!pan) return;
+      this.t.x = pan.tx + (ev.clientX - pan.x);
+      this.t.y = pan.ty + (ev.clientY - pan.y);
+      this._applyT();
+    });
+    const end = () => { pan = null; svg.classList.remove("panning"); };
+    svg.addEventListener("pointerup", end);
+    svg.addEventListener("pointercancel", end);
+  }
+}
+
+function buildFGControls(id, fg){
+  const bar = document.createElement("div");
+  bar.className = "fg-controls"; bar.id = id;
+  bar.innerHTML = `
+    <div class="fg-cg"><label>Colour</label>
+      <select data-fg="color">
+        <option value="role">by role</option>
+        <option value="req">by requirement</option>
+      </select></div>
+    <div class="fg-cg"><label>Show</label>
+      <button type="button" class="fg-chip on" data-fg="role-SUBJECT">
+        <i style="background:${ForceGraph.ROLE_COL.SUBJECT}"></i>subjects</button>
+      <button type="button" class="fg-chip on" data-fg="role-OBJECT">
+        <i style="background:${ForceGraph.ROLE_COL.OBJECT}"></i>objects</button></div>
+    <div class="fg-cg"><label>Min similarity <b data-fg="minval">0.00</b></label>
+      <input type="range" data-fg="min" min="0" max="1" step="0.05" value="0"></div>
+    <div class="fg-cg">
+      <label class="fg-check"><input type="checkbox" data-fg="connected"> linked only</label>
+      <label class="fg-check"><input type="checkbox" data-fg="labels" checked> labels</label></div>
+    <div class="fg-legend" data-fg="legend"></div>`;
+  const q = sel => bar.querySelector(sel);
+  q('[data-fg="color"]').onchange = e => fg.setColorMode(e.target.value);
+  bar.querySelectorAll(".fg-chip").forEach(btn => {
+    const role = btn.dataset.fg.split("-")[1];
+    btn.onclick = () => {
+      const on = !btn.classList.contains("on");
+      btn.classList.toggle("on", on);
+      fg.setRole(role, on);
+    };
+  });
+  const minR = q('[data-fg="min"]');
+  minR.oninput = e => {
+    q('[data-fg="minval"]').textContent = (+e.target.value).toFixed(2);
+    fg.setMinScore(+e.target.value);
+  };
+  q('[data-fg="connected"]').onchange = e => fg.setConnectedOnly(e.target.checked);
+  q('[data-fg="labels"]').onchange = e => fg.setLabels(e.target.checked);
+  fg._legendEl = q('[data-fg="legend"]');
+  fg.renderLegend();
+  return bar;
+}
+
+function mountFG(svgId, graph, emptyMsg){
+  const svg = $(svgId);
+  const wrap = svg.closest(".fg-wrap");
+  const ctrlId = svgId + "-ctrls";
+  const prev = $(ctrlId); if(prev) prev.remove();   // clear a stale controls bar
+  if(!graph || !graph.nodes || !graph.nodes.length){
+    svg.innerHTML = `<text x="50%" y="50%" text-anchor="middle"
+      fill="#9b9aa3" font-size="13">${esc(emptyMsg||"no subject/object entities to show")}</text>`;
+    return null;
+  }
+  const fg = new ForceGraph(svg);
+  fg.setData(graph);
+  if(wrap && wrap.parentNode){
+    wrap.parentNode.insertBefore(buildFGControls(ctrlId, fg), wrap);
+  }
+  return fg;
+}
+
 /* ---- graph: tidy tree layout in plain SVG ---- */
 const NW = 158, NH = 60, HGAP = 18, VGAP = 56;
 function renderGraph(tree){
@@ -1197,6 +1680,9 @@ function bootSet(){
       $("set-text").value = SET_EXAMPLES[+$("set-example").value]; parseSet(); } };
   $("set-parse").onclick = parseSet;
   $("set-text").value = SET_EXAMPLES[0];
+  $("set-threshold").value = "0.3";
+  $("set-thr-val").textContent = "0.30";
+  // the worked example is run from boot() once the selectors are populated
 }
 
 async function parseSet(){
@@ -1237,40 +1723,11 @@ function showSetWarn(warnings){
     : "<b>Heads up:</b><ul>" + warnings.map(w => `<li>${esc(w)}</li>`).join("") + "</ul>");
 }
 
+let connFG = null;
 function renderConnGraph(d){
-  const reqs = d.requirements, n = Math.max(reqs.length, 1);
-  const R = Math.max(150, n * 34);
-  const W = R * 2 + 260, H = R * 2 + 220;
-  const cx = W / 2, cy = H / 2;
-  const pos = {};
-  reqs.forEach((r, i) => {
-    const a = (2 * Math.PI * i / n) - Math.PI / 2;
-    pos[r.id] = {x: cx + R * Math.cos(a), y: cy + R * Math.sin(a)};
-  });
-  let edges = "";
-  for(const c of d.connections){
-    const p1 = pos[c.req_a], p2 = pos[c.req_b];
-    if(!p1 || !p2) continue;
-    const col = c.role === "SUBJECT" ? "#185FA5" : "#0F6E56";
-    edges += `<path d="M${p1.x},${p1.y} L${p2.x},${p2.y}" stroke="${col}"
-      stroke-width="${(1 + 3 * c.score).toFixed(2)}" fill="none" opacity="0.55">
-      <title>${esc(c.role)} ~${c.score.toFixed(2)}~ "${esc(c.text_a)}"</title></path>`;
-  }
-  let nodes = "";
-  reqs.forEach(r => {
-    const p = pos[r.id];
-    const label = r.text.length > 34 ? r.text.slice(0, 31) + "…" : r.text;
-    nodes += `<g><circle cx="${p.x}" cy="${p.y}" r="7" fill="#534AB7"/>
-      <title>${esc(r.id)}: ${esc(r.text)}</title>
-      <text x="${p.x}" y="${p.y - 12}" text-anchor="middle" font-size="11"
-        font-weight="600" fill="#2c2c2a">${esc(r.id)}</text>
-      <text x="${p.x}" y="${p.y + 18}" text-anchor="middle" font-size="9.5"
-        fill="#6f6e68">${esc(label)}</text></g>`;
-  });
-  const svg = $("conngraph");
-  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
-  svg.setAttribute("width", W); svg.setAttribute("height", H);
-  svg.innerHTML = edges + nodes;
+  connFG = mountFG("conngraph", d.entities,
+    "no shared subjects or objects — every requirement stands alone, " +
+    "or the threshold is too high");
 }
 
 function renderConnTable(d){
@@ -1324,13 +1781,73 @@ function expPlaceholder(){
   $("exp-text").placeholder = EXP_PLACEHOLDERS[$("exp-format").value] || "";
 }
 
+// A worked example for every import format. Each demonstrates the same small
+// requirement set so the cross-requirement connections are identical across
+// formats; extra columns (rationale) are detected and carried through downloads.
+const EXP_EXAMPLES = {
+  csv: `id,text,rationale
+R1,The flight management system shall calculate the optimal cruise altitude.,fuel economy
+R2,The flight management system shall log every altitude change to the maintenance recorder.,traceability
+R3,The pilot shall be able to override the calculated cruise altitude.,human authority
+R4,The navigation system shall calculate the optimal route to the destination.,fuel economy
+R5,The system should be fast and user-friendly.,vague on purpose`,
+  lines: `The flight management system shall calculate the optimal cruise altitude.
+The flight management system shall log every altitude change to the maintenance recorder.
+The pilot shall be able to override the calculated cruise altitude.
+The navigation system shall calculate the optimal route to the destination.`,
+  json: `[
+  {"id": "R1", "text": "The flight management system shall calculate the optimal cruise altitude.", "rationale": "fuel economy"},
+  {"id": "R2", "text": "The pilot shall be able to override the calculated cruise altitude.", "rationale": "human authority"},
+  {"id": "R3", "text": "The navigation system shall calculate the optimal route to the destination.", "rationale": "fuel economy"}
+]`,
+  reqif: `<?xml version="1.0" encoding="UTF-8"?>
+<REQ-IF xmlns="http://www.omg.org/spec/ReqIF/20110401/reqif.xsd">
+  <CORE-CONTENT><REQ-IF-CONTENT>
+    <SPEC-TYPES><SPEC-OBJECT-TYPE IDENTIFIER="ST-REQ" LONG-NAME="Requirement">
+      <SPEC-ATTRIBUTES>
+        <ATTRIBUTE-DEFINITION-STRING IDENTIFIER="AD-ID" LONG-NAME="ReqID"/>
+        <ATTRIBUTE-DEFINITION-STRING IDENTIFIER="AD-TEXT" LONG-NAME="ReqText"/>
+        <ATTRIBUTE-DEFINITION-STRING IDENTIFIER="AD-RAT" LONG-NAME="Rationale"/>
+      </SPEC-ATTRIBUTES>
+    </SPEC-OBJECT-TYPE></SPEC-TYPES>
+    <SPEC-OBJECTS>
+      <SPEC-OBJECT IDENTIFIER="OBJ-1"><VALUES>
+        <ATTRIBUTE-VALUE-STRING THE-VALUE="R1"><DEFINITION><ATTRIBUTE-DEFINITION-STRING-REF>AD-ID</ATTRIBUTE-DEFINITION-STRING-REF></DEFINITION></ATTRIBUTE-VALUE-STRING>
+        <ATTRIBUTE-VALUE-STRING THE-VALUE="The flight management system shall calculate the optimal cruise altitude."><DEFINITION><ATTRIBUTE-DEFINITION-STRING-REF>AD-TEXT</ATTRIBUTE-DEFINITION-STRING-REF></DEFINITION></ATTRIBUTE-VALUE-STRING>
+        <ATTRIBUTE-VALUE-STRING THE-VALUE="fuel economy"><DEFINITION><ATTRIBUTE-DEFINITION-STRING-REF>AD-RAT</ATTRIBUTE-DEFINITION-STRING-REF></DEFINITION></ATTRIBUTE-VALUE-STRING>
+      </VALUES></SPEC-OBJECT>
+      <SPEC-OBJECT IDENTIFIER="OBJ-2"><VALUES>
+        <ATTRIBUTE-VALUE-STRING THE-VALUE="R2"><DEFINITION><ATTRIBUTE-DEFINITION-STRING-REF>AD-ID</ATTRIBUTE-DEFINITION-STRING-REF></DEFINITION></ATTRIBUTE-VALUE-STRING>
+        <ATTRIBUTE-VALUE-STRING THE-VALUE="The pilot shall be able to override the calculated cruise altitude."><DEFINITION><ATTRIBUTE-DEFINITION-STRING-REF>AD-TEXT</ATTRIBUTE-DEFINITION-STRING-REF></DEFINITION></ATTRIBUTE-VALUE-STRING>
+        <ATTRIBUTE-VALUE-STRING THE-VALUE="human authority"><DEFINITION><ATTRIBUTE-DEFINITION-STRING-REF>AD-RAT</ATTRIBUTE-DEFINITION-STRING-REF></DEFINITION></ATTRIBUTE-VALUE-STRING>
+      </VALUES></SPEC-OBJECT>
+    </SPEC-OBJECTS>
+  </REQ-IF-CONTENT></CORE-CONTENT>
+</REQ-IF>`,
+};
+
+function expLoadExample(fmt){
+  fmt = fmt || "csv";
+  expTab("paste");
+  $("exp-format").value = fmt;
+  expPlaceholder();
+  $("exp-text").value = EXP_EXAMPLES[fmt] || EXP_EXAMPLES.csv;
+  parseExport();
+}
+
 function bootExport(){
   $("exp-btn").onclick = parseExport;
   expTab("paste");
+  $("exp-format").value = "csv";
   expPlaceholder();
   $("exp-file").addEventListener("change", () => {
     if($("exp-file").files.length) parseExport();
   });
+  $("exp-example").onchange = () => expLoadExample($("exp-example").value);
+  $("exp-text").value = EXP_EXAMPLES.csv;    // load a worked example…
+  $("exp-threshold").value = "0.3";
+  $("exp-thr-val").textContent = "0.30";
+  // …analyzed from boot() once the selectors are populated
 }
 
 async function parseExport(){
@@ -1426,48 +1943,11 @@ function renderExportResults(d){
   renderExportTable(d);
 }
 
+let expFG = null;
 function renderExportGraph(d){
-  const reqs = d.requirements, n = Math.max(reqs.length, 1);
-  const R = Math.max(150, n * 34);
-  const W = R * 2 + 260, H = R * 2 + 220;
-  const cx = W / 2, cy = H / 2;
-  const pos = {};
-  reqs.forEach((r, i) => {
-    const a = (2 * Math.PI * i / n) - Math.PI / 2;
-    pos[r.id] = {x: cx + R * Math.cos(a), y: cy + R * Math.sin(a)};
-  });
-  let edges = "";
-  for(const c of d.connections){
-    const p1 = pos[c.req_a], p2 = pos[c.req_b];
-    if(!p1 || !p2) continue;
-    const col = c.role === "SUBJECT" ? "#185FA5" : "#0F6E56";
-    edges += `<path d="M${p1.x},${p1.y} L${p2.x},${p2.y}" stroke="${col}"
-      stroke-width="${(1 + 3 * c.score).toFixed(2)}" fill="none" opacity="0.55">
-      <title>${esc(c.role)} ~${c.score.toFixed(2)}~ "${esc(c.text_a)}"</title></path>`;
-  }
-  let nodes = "";
-  reqs.forEach(r => {
-    const p = pos[r.id];
-    const label = r.text.length > 34 ? r.text.slice(0, 31) + "…" : r.text;
-    const qcol = r.non_atomic ? "var(--bad)" :
-                 (r.weak_words ? "#E5A020" : "var(--ok)");
-    nodes += `<g><circle cx="${p.x}" cy="${p.y}" r="7" fill="${qcol}"/>
-      <title>${esc(r.id)}: ${esc(r.text)}${r.type ? " ["+esc(r.type)+"]" : ""}${r.weak_words ? " ⚠ "+esc(r.weak_words) : ""}</title>
-      <text x="${p.x}" y="${p.y - 12}" text-anchor="middle" font-size="11"
-        font-weight="600" fill="#2c2c2a">${esc(r.id)}</text>
-      <text x="${p.x}" y="${p.y + 18}" text-anchor="middle" font-size="9.5"
-        fill="#6f6e68">${esc(label)}</text></g>`;
-  });
-  const svg = $("exp-conngraph");
-  if(n < 2 && d.connections.length === 0){
-    svg.setAttribute("viewBox","0 0 1 1");
-    svg.setAttribute("width",1); svg.setAttribute("height",1);
-    svg.innerHTML = "";
-    return;
-  }
-  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
-  svg.setAttribute("width", W); svg.setAttribute("height", H);
-  svg.innerHTML = edges + nodes;
+  expFG = mountFG("exp-conngraph", d.entities,
+    "no shared subjects or objects across these requirements — " +
+    "try lowering the threshold");
 }
 
 function renderExportTable(d){
@@ -1524,8 +2004,30 @@ function dlExport(kind){
 /* ── Compare Model vs Requirements ──────────────────────────────── */
 let cmpLast = null;
 
+const CMP_EXAMPLE_MODEL = `package automotive {
+  part def Vehicle { attribute speed : Real; }
+  part def BrakeSystem { attribute pressure : Real; }
+  part def SpeedSensor { attribute wheelSpeed : Real; }
+  action def ApplyBrakes { in pedal : Real; out force : Real; }
+  state def BrakeState { state idle; state active; }
+}`;
+const CMP_EXAMPLE_REQS = `The vehicle shall respond to brake commands within 200 ms.
+The braking system shall decelerate the vehicle at 5 m/s2.
+The speed sensor shall measure the wheel speed continuously.
+When the system is idle, the vehicle shall not apply brake force.`;
+
+function cmpLoadExample(){
+  $("cmp-model").value = CMP_EXAMPLE_MODEL;
+  $("cmp-reqs").value  = CMP_EXAMPLE_REQS;
+  $("cmp-req-format").value = "plain";
+  parseCompare();
+}
+
 function bootCompare(){
   $("cmp-btn").onclick = parseCompare;
+  $("cmp-example").onclick = cmpLoadExample;
+  $("cmp-model").value = CMP_EXAMPLE_MODEL;   // worked example, run from boot()
+  $("cmp-reqs").value  = CMP_EXAMPLE_REQS;
 }
 
 async function parseCompare(){
@@ -1666,24 +2168,97 @@ bootCompareV1();
 
 let v1Last = null;
 let v1ModelFmt = "xmi";
+let v1MdzipB64 = null;     // base64 data-URL of an uploaded .mdzip
+let v1MdzipName = "";
 
 function v1SetFmt(fmt) {
   v1ModelFmt = fmt;
-  ["xmi","ttl"].forEach(f => {
+  // the format-tab button id uses "ttl" for the turtle option
+  const tabKey = fmt === "turtle" ? "ttl" : fmt;
+  ["xmi","ttl","mdzip"].forEach(f => {
     const btn = $("v1-tab-" + f);
-    if (btn) btn.classList.toggle("active", f === fmt);
+    if (btn) btn.classList.toggle("active", f === tabKey);
   });
   const ta = $("v1-model");
+  const mz = $("v1-mdzip-pane");
+  // mdzip is a binary upload — swap the textarea for the file input
+  if (fmt === "mdzip") {
+    ta.style.display = "none";
+    mz.style.display = "";
+    return;                       // no paste example for an upload
+  }
+  ta.style.display = "";
+  mz.style.display = "none";
   if (fmt === "xmi") {
     ta.placeholder = 'Paste SysML v1 XMI here…\n\n<uml:Model xmlns:uml="http://www.eclipse.org/uml2/5.0.0/UML" …>';
   } else {
     ta.placeholder = 'Paste Turtle/RDF here…\n\n@prefix sysml: <http://www.omg.org/spec/SysML/> .\n:BrakeSystem a sysml:Block ; rdfs:label "BrakeSystem" .';
   }
+  // keep a worked example on screen when flipping formats — but never clobber
+  // content the user has actually typed
+  const cur = ta.value.trim();
+  if (!cur || cur === V1_EXAMPLE_XMI.trim() || cur === V1_EXAMPLE_TTL.trim()) {
+    ta.value = v1ExampleFor(fmt);
+    if ($("v1-reqs").value.trim() === "") $("v1-reqs").value = V1_EXAMPLE_REQS;
+    parseCompareV1();
+  }
+}
+
+// Parse the "Stereotype = ROLE_or_verb" lines from the custom-stereotype box
+// into {roles:{…}, relations:{…}} for the backend.
+const V1_ROLE_NAMES = new Set(["SUBJECT","OBJECT","PROCESS","CONDITION","ACTOR","CONSTRAINT"]);
+function v1StereotypeMap(){
+  const txt = ($("v1-stereo-map") && $("v1-stereo-map").value || "").trim();
+  if(!txt) return null;
+  const roles = {}, relations = {};
+  for(const line of txt.split("\n")){
+    const m = line.split(/[=:]/);
+    if(m.length < 2) continue;
+    const name = m[0].trim(), val = m.slice(1).join("=").trim();
+    if(!name || !val) continue;
+    if(V1_ROLE_NAMES.has(val.toUpperCase())) roles[name] = val.toUpperCase();
+    else relations[name] = val.toLowerCase();
+  }
+  const out = {};
+  if(Object.keys(roles).length) out.roles = roles;
+  if(Object.keys(relations).length) out.relations = relations;
+  return Object.keys(out).length ? out : null;
 }
 
 // A small self-contained worked example: a Turtle model with one auditable
 // satisfy link, plus ID-bearing requirements that exercise all three trace
 // states — Verified (SYS-001), Candidate (SYS-002), Gap (SYS-003).
+// XMI worked example — a Papyrus-style SysML v1 model with one auditable
+// satisfy link (BrakeSystem → SYS-001). With the requirement set below it
+// exercises all three trace states: Verified (SYS-001), Candidate (SYS-002),
+// Gap (SYS-003).
+const V1_EXAMPLE_XMI = `<?xml version="1.0" encoding="UTF-8"?>
+<uml:Model xmlns:xmi="http://www.omg.org/spec/XMI/20131001"
+           xmlns:uml="http://www.eclipse.org/uml2/5.0.0/UML"
+           xmlns:SysML="http://www.eclipse.org/papyrus/sysml/1.1/SysML"
+           xmi:id="_m1" name="braking">
+  <packagedElement xmi:type="uml:Package" xmi:id="_pkg" name="automotive">
+    <packagedElement xmi:type="uml:Class" xmi:id="_blk1" name="BrakeSystem">
+      <ownedComment body="Decelerates the vehicle"/>
+      <ownedAttribute xmi:id="_p1" name="pressure"/>
+    </packagedElement>
+    <packagedElement xmi:type="uml:Class" xmi:id="_blk2" name="SpeedSensor">
+      <ownedComment body="Measures wheel speed continuously"/>
+    </packagedElement>
+    <packagedElement xmi:type="uml:Activity" xmi:id="_act1" name="ApplyBrakes"/>
+    <packagedElement xmi:type="uml:Class" xmi:id="_req1" name="BrakingPerf"/>
+    <packagedElement xmi:type="uml:Abstraction" xmi:id="_abs1">
+      <client xmi:idref="_blk1"/>
+      <supplier xmi:idref="_req1"/>
+    </packagedElement>
+  </packagedElement>
+  <SysML:Block xmi:id="_s1" base_Class="_blk1"/>
+  <SysML:Block xmi:id="_s2" base_Class="_blk2"/>
+  <SysML:Requirement xmi:id="_s3" base_Class="_req1" id="SYS-001"
+                     text="The brake system shall decelerate the vehicle at 5 m/s2."/>
+  <SysML:Satisfy xmi:id="_s4" base_Abstraction="_abs1"/>
+</uml:Model>`;
+
 const V1_EXAMPLE_TTL = `@prefix sysmlkg: <http://reqgraph.io/sysml/> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix : <http://example.org/uav#> .
@@ -1706,9 +2281,11 @@ SYS-001,The brake system shall decelerate the vehicle at 5 m/s2 within 200 ms.
 SYS-002,The speed sensor shall measure wheel speed continuously.
 SYS-003,The system shall log every detected fault to the maintenance recorder.`;
 
+function v1ExampleFor(fmt){ return fmt === "xmi" ? V1_EXAMPLE_XMI : V1_EXAMPLE_TTL; }
+
 function v1LoadExample() {
-  v1SetFmt("turtle");
-  $("v1-model").value = V1_EXAMPLE_TTL;
+  // load the worked example matching the currently-selected model format
+  $("v1-model").value = v1ExampleFor(v1ModelFmt);
   $("v1-reqs").value = V1_EXAMPLE_REQS;
   $("v1-req-format").value = "csv";
   $("v1-thr").value = "0.3"; $("v1-thr").dispatchEvent(new Event("input"));
@@ -1718,6 +2295,19 @@ function v1LoadExample() {
 function bootCompareV1() {
   $("v1-btn").onclick = parseCompareV1;
   $("v1-example").onclick = v1LoadExample;
+  // read an uploaded .mdzip as base64 and compare it
+  const f = $("v1-mdzip-file");
+  if(f) f.addEventListener("change", () => {
+    if(!f.files.length) return;
+    const file = f.files[0];
+    v1MdzipName = file.name;
+    $("v1-mdzip-name").textContent = "— loaded: " + file.name;
+    const reader = new FileReader();
+    reader.onload = e => { v1MdzipB64 = e.target.result; parseCompareV1(); };
+    reader.readAsDataURL(file);
+  });
+  // the worked example is loaded + run from boot() (after the TDZ-bound
+  // v1 module state below has initialised and the selectors are populated)
 }
 
 async function parseCompareV1() {
@@ -1728,15 +2318,22 @@ async function parseCompareV1() {
   try {
     const roles = [...document.querySelectorAll(".v1-role")]
       .filter(cb => cb.checked).map(cb => cb.value);
+    const isMdzip = v1ModelFmt === "mdzip";
+    if(isMdzip && !v1MdzipB64){
+      showV1Error("choose a .mdzip file to upload first");
+      btn.disabled = false; btn.textContent = lbl; return;
+    }
     const payload = {
-      model_content: $("v1-model").value,
+      model_content: isMdzip ? v1MdzipB64 : $("v1-model").value,
       model_format:  v1ModelFmt,
+      model_encoding: isMdzip ? "base64" : undefined,
       req_content:   $("v1-reqs").value,
       req_format:    $("v1-req-format").value,
       threshold:     parseFloat($("v1-thr").value),
       context_hops:  parseInt($("v1-hops").value),
       similarity:    $("v1-sim").value,
       roles,
+      stereotype_map: v1StereotypeMap(),
     };
     const resp = await fetch("/api/compare-v1", {
       method: "POST",

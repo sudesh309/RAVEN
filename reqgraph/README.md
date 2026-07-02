@@ -573,13 +573,16 @@ python -m reqgraph compare model.sysml reqs.txt --format json --graphml match.gr
 python -m reqgraph compare model.sysml reqs.csv --similarity embedding --threshold 0.5
 ```
 
-### `compare-v1` — SysML v1 XMI / Turtle (context-aware)
+### `compare-v1` — SysML v1 XMI / Turtle / Cameo `.mdzip` (context-aware)
 
-For SysML v1 models exported as **XMI** (MagicDraw/Cameo/Papyrus) or as a
+For SysML v1 models exported as **XMI** (MagicDraw/Cameo/Papyrus), as a
 **Turtle/RDF ontology** (auto-detected by extension/content; Turtle needs
-`rdflib`). Instead of matching on element names alone, it builds a *neighborhood
-context* for each element by BFS over the model graph (`--context-hops`, default
-2) and scores:
+`rdflib`), or as a native **Cameo/MagicDraw `.mdzip`** project — the `.mdzip`
+ZIP is opened, its UML model XMI part(s) are extracted (and merged if the model
+spans several parts) and parsed automatically, in the CLI and in the GUI's
+*Cameo .mdzip* upload tab. Instead of matching on element names alone, it builds
+a *neighborhood context* for each element by BFS over the model graph
+(`--context-hops`, default 2) and scores:
 
 ```
 confidence = 0.25·name + 0.55·context + 0.20·satisfaction_bonus
@@ -589,12 +592,32 @@ The satisfaction bonus rewards elements the model already links to a matching
 requirement via a `satisfy`/`refine` relation.
 
 ```bash
-python -m reqgraph compare-v1 model.xmi reqs.csv                  # XMI input
-python -m reqgraph compare-v1 model.ttl reqs.csv                  # Turtle/RDF input
+python -m reqgraph compare-v1 model.xmi   reqs.csv               # XMI input
+python -m reqgraph compare-v1 model.ttl   reqs.csv               # Turtle/RDF input
+python -m reqgraph compare-v1 model.mdzip reqs.csv               # Cameo .mdzip
 python -m reqgraph compare-v1 model.xmi reqs.csv --context-hops 3 --threshold 0.4 \
         --report match.json --graphml match.graphml \
         --kg model_kg.graphml --out-turtle model.ttl --ontology-graphml ont.graphml
 ```
+
+**Custom stereotypes.** Company SysML profiles apply custom stereotypes
+(`SafetyRequirement`, `ECU`, a custom `verifies` relation, …). These import
+automatically: a stereotype application is detected by its `base_*` attribute
+(not by namespace), its name is preserved through every export, custom
+requirement stereotypes keep their id/text and route to `CONSTRAINT`, and custom
+trace relations (`verifies`, `isAllocatedTo`, …) normalise to the canonical
+`satisfy`/`derive`/… verbs so they still count as **auditable** in the RVTM. When
+the name heuristic isn't enough, pin a profile explicitly:
+
+```bash
+python -m reqgraph compare-v1 model.mdzip reqs.csv \
+    --stereotype-roles "SafetyRequirement=CONSTRAINT,ECU=SUBJECT" \
+    --stereotype-map profile.json   # {"roles":{…},"relations":{"verifies":"satisfy"}}
+```
+
+In the GUI's *Compare SysML v1* card, the same mapping is available under the
+**“Custom stereotypes? Map your company profile”** box (one `Stereotype = ROLE`
+per line).
 
 Extra outputs unique to `compare-v1`:
 
@@ -678,13 +701,59 @@ The page also includes:
 * an amber **compound-requirement warning** with per-requirement tabs when a
   single input contains several "shall" clauses;
 * a **"Requirement set — find connections"** panel: paste a requirement set
-  (one per line) and see a network graph connecting requirements that share
-  similar SUBJECT/OBJECT elements, with the same knowledge-graph export
+  (one per line) and see the SUBJECT/OBJECT entities rendered in an interactive
+  **force-directed graph** (see below), with the same knowledge-graph export
   buttons.
 * an **"Import & analyze"** panel: upload a CSV / Excel / JSON / ReqIF file (or
   paste raw text), and get the per-requirement quality table (auto-discovering
-  any extra metadata columns), the cross-requirement connections network, and
+  any extra metadata columns), the same force-directed entity graph, and
   one-click downloads of the CSV, JSON, and consolidated element-level GraphML.
+
+**Every section — and every feature variant — ships a worked example.** The
+parser, connection finder, import pipeline, and both SysML-comparison cards all
+show live output the moment the page opens, so nothing starts blank. Beyond the
+on-load example, each input *mode* has its own loadable example:
+
+* the **import** panel has an *Example* selector with a ready-to-run sample for
+  every format — **CSV** (with a rationale column), **plain text**, **JSON**,
+  and **ReqIF** XML;
+* the **SysML v2 compare** card has a **Load example** button;
+* the **SysML v1 compare** card loads a worked example for whichever model
+  format tab is active — a Papyrus-style **XMI** model and an equivalent
+  **Turtle/RDF** model, each wired so the requirement set exercises all three
+  trace states (Verified / Candidate / Gap).
+
+### Force-directed entity graph (subjects & objects)
+
+The connection and import panels visualise the requirement set as a live
+**force-directed graph** of the actual SUBJECT and OBJECT phrases — not just
+boxes per requirement. It is a dependency-free, offline SVG renderer (no CDN,
+no D3) with a real physics simulation: charge repulsion, link springs, and
+centering gravity settle the layout, then it auto-frames to fit.
+
+* nodes are the subject (blue) and object (green) phrases; node size grows with
+  the number of similarity links;
+* edges connect same-role phrases that score above the threshold, with
+  thickness scaled by similarity;
+* **drag** a node to pin it (drop to keep, click to release, double-click to
+  unpin), **scroll** to zoom toward the cursor, **drag the canvas** to pan, and
+  use the **+ / − / fit** toolbar; hovering a node highlights its neighbours.
+
+A **controls bar** above the canvas re-shapes the view live, without
+re-querying the backend:
+
+* **Colour by** — *role* (subject/object) or *requirement* (one hue per source
+  requirement, so you can see which phrases came from where);
+* **Show** chips — toggle subjects and objects on/off independently;
+* **Min similarity** slider — hide weaker links to reveal only the strongest
+  matches;
+* **linked only** — hide isolated phrases that share nothing with the set;
+* **labels** — declutter by hiding the phrase labels;
+
+a live legend tracks the current colour scheme and the visible node/link count.
+
+The same `{nodes, edges}` data is available programmatically in the
+`/api/connections` and `/api/export` responses under the `entities` key.
 
 ## Knowledge graph export
 

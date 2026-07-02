@@ -814,3 +814,176 @@ def test_gui_compare_v1_server_smoke():
     data = json.loads(resp.read())
     assert "semantic_match" in data
     server.server_close()
+
+
+# ---------------------------------------------------------------------------
+# Cameo .mdzip import
+# ---------------------------------------------------------------------------
+
+def _make_mdzip(*parts: str, junk: bool = True) -> bytes:
+    """Build a synthetic Cameo .mdzip (a zip) with the given XMI members."""
+    import io
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for i, xmi in enumerate(parts):
+            name = ("com.nomagic.magicdraw.uml_model.model" if i == 0
+                    else f"com.nomagic.magicdraw.uml_model.shared_model.{i}")
+            z.writestr(name, xmi)
+        if junk:
+            z.writestr("com.nomagic.ci.metamodel.project", "not xml at all")
+    return buf.getvalue()
+
+
+def test_mdzip_extracts_and_parses():
+    from reqgraph.sysml_v1_parser import parse_mdzip, parse_sysml_v1
+    flat = parse_sysml_v1(AUTOMOTIVE_XMI)
+    md = parse_mdzip(_make_mdzip(AUTOMOTIVE_XMI))
+    assert {e.name for e in md.elements} == {e.name for e in flat.elements}
+    assert any(r.rel_type == "satisfy" for r in md.relations)
+
+
+def test_mdzip_skips_non_xmi_members():
+    from reqgraph.sysml_v1_parser import parse_mdzip
+    md = parse_mdzip(_make_mdzip(AUTOMOTIVE_XMI, junk=True))
+    # the junk metamodel member must not become an element
+    assert all(e.name for e in md.elements)
+    assert len(md.elements) >= 6
+
+
+def test_mdzip_multifragment_merges():
+    """A satisfy link whose endpoints live in two different members survives."""
+    from reqgraph.sysml_v1_parser import parse_mdzip
+    part_a = """<?xml version="1.0"?>
+<uml:Model xmlns:xmi="http://www.omg.org/spec/XMI/20131001"
+           xmlns:uml="http://www.eclipse.org/uml2/5.0.0/UML"
+           xmlns:SysML="http://www.eclipse.org/papyrus/sysml/1.1/SysML" name="a">
+  <packagedElement xmi:type="uml:Class" xmi:id="_b1" name="BrakeSystem"/>
+  <packagedElement xmi:type="uml:Abstraction" xmi:id="_a1">
+    <client xmi:idref="_b1"/><supplier xmi:idref="_r1"/></packagedElement>
+  <SysML:Block xmi:id="_s1" base_Class="_b1"/>
+  <SysML:Satisfy xmi:id="_s2" base_Abstraction="_a1"/>
+</uml:Model>"""
+    part_b = """<?xml version="1.0"?>
+<uml:Model xmlns:xmi="http://www.omg.org/spec/XMI/20131001"
+           xmlns:uml="http://www.eclipse.org/uml2/5.0.0/UML"
+           xmlns:SysML="http://www.eclipse.org/papyrus/sysml/1.1/SysML" name="b">
+  <packagedElement xmi:type="uml:Class" xmi:id="_r1" name="BrakingPerf"/>
+  <SysML:Requirement xmi:id="_s3" base_Class="_r1" id="R1" text="shall brake"/>
+</uml:Model>"""
+    md = parse_mdzip(_make_mdzip(part_a, part_b, junk=False))
+    names = {e.name for e in md.elements}
+    assert {"BrakeSystem", "BrakingPerf"} <= names
+    sat = [r for r in md.relations if r.rel_type == "satisfy"]
+    assert sat and sat[0].source_id == "_b1" and sat[0].target_id == "_r1"
+
+
+def test_mdzip_bad_zip_raises():
+    from reqgraph.errors import DataFormatError
+    from reqgraph.sysml_v1_parser import parse_mdzip
+    with pytest.raises(DataFormatError):
+        parse_mdzip(b"this is not a zip archive at all")
+
+
+def test_mdzip_no_model_raises():
+    import io
+    import zipfile
+    from reqgraph.errors import DataFormatError
+    from reqgraph.sysml_v1_parser import parse_mdzip
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("com.nomagic.ci.metamodel.project", "junk")
+    with pytest.raises(DataFormatError):
+        parse_mdzip(buf.getvalue())
+
+
+def test_read_sysml_v1_mdzip_from_path(tmp_path):
+    from reqgraph.sysml_v1_parser import read_sysml_v1
+    p = tmp_path / "model.mdzip"
+    p.write_bytes(_make_mdzip(AUTOMOTIVE_XMI))
+    model = read_sysml_v1(str(p))
+    assert any(e.name == "BrakeSystem" for e in model.elements)
+
+
+def test_gui_compare_v1_accepts_mdzip():
+    import base64
+    from reqgraph.gui import GuiState, compare_v1_request
+    b64 = base64.b64encode(_make_mdzip(AUTOMOTIVE_XMI)).decode()
+    payload = {
+        "model_content": b64,
+        "model_format": "mdzip",
+        "model_encoding": "base64",
+        "req_content": "\n".join(t for _, t in REQUIREMENTS),
+        "threshold": 0.1,
+    }
+    result = compare_v1_request(GuiState(), payload)
+    assert "semantic_match" in result and "traceability" in result
+
+
+# ---------------------------------------------------------------------------
+# Custom-profile stereotypes
+# ---------------------------------------------------------------------------
+
+CUSTOM_XMI = """<?xml version="1.0" encoding="UTF-8"?>
+<uml:Model xmlns:xmi="http://www.omg.org/spec/XMI/20131001"
+           xmlns:uml="http://www.eclipse.org/uml2/5.0.0/UML"
+           xmlns:acme="http://acme.example.com/profile" name="m">
+  <packagedElement xmi:type="uml:Class" xmi:id="_ecu" name="BrakeECU"/>
+  <packagedElement xmi:type="uml:Class" xmi:id="_w" name="Widget"/>
+  <packagedElement xmi:type="uml:Class" xmi:id="_req" name="StoppingDistance"/>
+  <packagedElement xmi:type="uml:Abstraction" xmi:id="_abs">
+    <client xmi:idref="_ecu"/><supplier xmi:idref="_req"/></packagedElement>
+  <acme:ECU xmi:id="_x1" base_Class="_ecu"/>
+  <acme:Widget xmi:id="_x2" base_Class="_w"/>
+  <acme:SafetyRequirement xmi:id="_x3" base_Class="_req" id="SR-1"
+                          text="The vehicle shall stop within 40 m."/>
+  <acme:verifies xmi:id="_x4" base_Abstraction="_abs"/>
+</uml:Model>"""
+
+
+def test_custom_stereotype_detected_by_base_attr():
+    from reqgraph.sysml_v1_parser import parse_sysml_v1
+    m = parse_sysml_v1(CUSTOM_XMI)
+    by_name = {e.name: e for e in m.elements}
+    assert by_name["BrakeECU"].stereotype == "ECU"          # non-SysML namespace
+    assert by_name["StoppingDistance"].stereotype == "SafetyRequirement"
+
+
+def test_custom_requirement_maps_to_constraint():
+    from reqgraph.core import Role
+    from reqgraph.sysml_v1_parser import parse_sysml_v1
+    m = parse_sysml_v1(CUSTOM_XMI)
+    req = next(e for e in m.elements if e.name == "StoppingDistance")
+    assert req.role is Role.CONSTRAINT
+    assert req.req_id == "SR-1" and "stop within" in req.req_text
+
+
+def test_custom_relation_preserved_as_trace_verb():
+    from reqgraph.sysml_v1_parser import parse_sysml_v1
+    m = parse_sysml_v1(CUSTOM_XMI)
+    rels = [r for r in m.relations if r.source_id == "_ecu" and r.target_id == "_req"]
+    assert rels and rels[0].rel_type == "satisfy"   # "verifies" → trace synonym
+
+
+def test_stereotype_override_map_wins():
+    from reqgraph.core import Role
+    from reqgraph.sysml_v1_parser import parse_sysml_v1
+    m = parse_sysml_v1(CUSTOM_XMI,
+                       stereotype_roles={"Widget": "OBJECT"},
+                       stereotype_relations={"verifies": "trace"})
+    widget = next(e for e in m.elements if e.name == "Widget")
+    assert widget.role is Role.OBJECT
+    rels = [r for r in m.relations if r.source_id == "_ecu"]
+    assert rels and rels[0].rel_type == "trace"
+
+
+def test_custom_relation_is_auditable_in_rvtm():
+    """A custom 'verifies' trace link should let the RVTM mark the req Verified."""
+    from reqgraph.sysml_v1_compare import compare_v1
+    from reqgraph.traceability import build_traceability_matrix, TraceStatus
+    from reqgraph.sysml_v1_parser import parse_sysml_v1
+    m = parse_sysml_v1(CUSTOM_XMI)
+    items = [("SR-1", "The vehicle shall stop within 40 m.")]
+    report = compare_v1(m, items, threshold=0.3, context_hops=2)
+    tm = build_traceability_matrix(m, items, report, candidate_threshold=0.3)
+    assert tm.items[0].trace_status is TraceStatus.VERIFIED
