@@ -117,7 +117,7 @@
   details.paramhelp{margin-top:10px;font-size:13px;color:var(--muted)}
   details.paramhelp summary{cursor:pointer;color:var(--accent);font-weight:600;
     list-style:none;user-select:none}
-  details.paramhelp summary::before{content:"\\24D8  ";font-weight:400}
+  details.paramhelp summary::before{content:"\24D8  ";font-weight:400}
   details.paramhelp[open] summary{margin-bottom:6px}
   details.paramhelp ul{margin:4px 0;padding-left:20px;line-height:1.65}
   details.paramhelp code{background:var(--accent-soft);border-radius:4px;
@@ -130,7 +130,7 @@
   /* force-directed entity graph (subjects & objects) */
   .fg-wrap{position:relative;border:1px solid var(--border);border-radius:12px;
     background:radial-gradient(circle at 1px 1px,#e9e8f3 1px,transparent 0) 0 0/22px 22px,
-      linear-gradient(180deg,#fbfbfe,#f4f3fb);overflow:hidden;height:460px;
+      linear-gradient(180deg,#fbfbfe,#f4f3fb);overflow:hidden;height:380px;
     user-select:none;touch-action:none}
   .fg-wrap svg{display:block;width:100%;height:100%;cursor:grab}
   .fg-wrap svg.panning{cursor:grabbing}
@@ -206,6 +206,29 @@
     text-decoration-thickness:2px;text-underline-offset:3px}
   /* top-of-page 4-step process overview */
   #process h2{margin-bottom:4px}
+  section[id], details[id]{scroll-margin-top:54px}
+  /* slim sticky tool navigation */
+  #toolnav{position:sticky;top:0;z-index:20;display:flex;gap:6px;align-items:center;
+    padding:8px 28px;background:color-mix(in srgb,var(--bg) 88%,transparent);
+    backdrop-filter:blur(6px);border-bottom:1px solid var(--border);overflow-x:auto}
+  #toolnav a{font-size:12.5px;color:var(--muted);text-decoration:none;white-space:nowrap;
+    padding:4px 12px;border-radius:99px;border:1px solid transparent}
+  #toolnav a:hover{color:var(--accent);border-color:var(--border);background:#fff}
+  #toolnav a b{color:var(--accent);font-weight:700;margin-right:4px}
+  /* generic scroll cap for long result tables */
+  .scrollbox{max-height:340px;overflow-y:auto;overflow-x:auto;
+    border-bottom:1px solid var(--border)}
+  .scrollbox thead th{position:sticky;top:0;background:var(--card);z-index:1}
+  /* collapsible card (storyline) */
+  details.card > summary{cursor:pointer;list-style:none;user-select:none;
+    font-size:13px;font-weight:600;letter-spacing:.04em;color:var(--muted);
+    text-transform:uppercase;display:flex;align-items:center;gap:8px}
+  details.card > summary::before{content:"▸";color:var(--accent);font-size:12px;
+    transition:transform .15s}
+  details.card[open] > summary::before{transform:rotate(90deg)}
+  details.card > summary .why{font-weight:400;text-transform:none;letter-spacing:0;
+    color:var(--muted);font-size:12.5px}
+  details.card[open] > summary{margin-bottom:12px}
   #process .pintro{font-size:12.5px;color:var(--muted);margin:0 0 14px;line-height:1.5}
   .steps4{list-style:none;display:grid;grid-template-columns:repeat(4,1fr);
     gap:12px;margin:0;padding:0}
@@ -295,38 +318,36 @@
      Constraints &amp; roadmap &rarr;</a>
   <span class="ver" id="ver"></span>
 </header>
+
+<nav id="toolnav">
+  <a href="#tool-parse"><b>1</b>Parse</a>
+  <a href="#tool-connect"><b>2</b>Connections</a>
+  <a href="#tool-import"><b>3</b>Import &amp; analyze</a>
+  <a href="#tool-compare2"><b>4</b>Compare SysML v2</a>
+  <a href="#tool-compare1"><b>5</b>Compare SysML v1 · RVTM</a>
+</nav>
 <main>
   <section class="card" id="process">
     <h2>How RAVEN works — 4 steps</h2>
-    <p class="pintro">RAVEN takes a requirement set from raw document to a
-      validated, machine-readable specification. The tools further down the page
-      carry out steps&nbsp;1, 2 and 4; step&nbsp;3 is your review.</p>
     <ol class="steps4">
-      <li><span class="sn">1</span>
-        <div><div class="t">Upload requirement set / document</div>
-          <p>Import a CSV, Excel, JSON or ReqIF file — or paste plain text. Extra
-            columns (rationale, applicability…) are detected automatically.</p>
+      <li title="Import a CSV, Excel, JSON or ReqIF file — or paste plain text. Extra columns are detected automatically."><span class="sn">1</span>
+        <div><div class="t">Upload a requirement set</div>
           <span class="tag now">Import &amp; analyze</span></div></li>
-      <li><span class="sn">2</span>
-        <div><div class="t">Run this checker</div>
-          <p>Parse every requirement into IREB roles, score its quality, find
-            related requirements, and compare against your SysML model.</p>
+      <li title="Parse every requirement into IREB roles, score its quality, find related requirements, and compare against your SysML model."><span class="sn">2</span>
+        <div><div class="t">Run the checker</div>
           <span class="tag now">Automated</span></div></li>
-      <li><span class="sn">3</span>
-        <div><div class="t">Validate suggestions — human in the loop</div>
-          <p>Review the flagged smells, coverage gaps and match suggestions in the
-            results, and accept or adjust each one.</p>
+      <li title="Review the flagged smells, coverage gaps and match suggestions, and accept or adjust each one."><span class="sn">3</span>
+        <div><div class="t">Validate suggestions</div>
           <span class="tag you">You decide</span></div></li>
-      <li><span class="sn">4</span>
-        <div><div class="t">Generate the final valid requirement</div>
-          <p>Export the validated set as CSV, JSON, GraphML or Turtle — ready for
-            a triplestore, tool import, or sign-off.</p>
+      <li title="Export the validated set as CSV, JSON, GraphML or Turtle — ready for a triplestore, tool import, or sign-off."><span class="sn">4</span>
+        <div><div class="t">Generate the valid set</div>
           <span class="tag now">Download</span></div></li>
     </ol>
   </section>
 
-  <section class="card" id="story">
-    <h2>Use case — one drone, three engineers</h2>
+  <details class="card" id="story">
+    <summary>Use case — one drone, three engineers
+      <span class="why">· how an RE, an architect and a V&amp;V engineer share the loop</span></summary>
     <p class="pintro"><b>Scenario:</b> a team is specifying an autonomous inspection
       drone. The same requirement set flows through RAVEN's four steps, but each
       engineer owns a different slice of the loop. The sample files in
@@ -403,15 +424,12 @@
       <b>upload → check → validate → generate</b>. The requirements engineer cleans
       the input, the architect proves the design covers it, and the V&amp;V engineer
       validates and signs off the final, machine-readable specification.</p>
-  </section>
+  </details>
 
   <section class="card" id="tool-parse">
     <h2><span class="step">1</span>Parse a requirement</h2>
-    <p class="lead">Type or load one requirement. It is split into IREB roles
-      (<b>subject</b>, <b>process</b>, <b>object</b>, <b>condition</b>…) and drawn
-      as a semantic graph — every character is kept, so the graph regenerates the
-      exact original text. Pick a <b>template</b> (sentence structure) and a
-      <b>backend</b> (how roles are detected) below.</p>
+    <p class="lead">One requirement in → IREB roles + a semantic graph out, with a
+      byte-exact round-trip back to the original text.</p>
     <textarea id="text" spellcheck="false"></textarea>
     <div class="controls">
       <div class="ctl"><label for="example">Example</label>
@@ -423,10 +441,13 @@
       <button class="primary" id="parse" style="align-self:flex-end">Parse &rarr; graph</button>
       <span class="hint">Ctrl+Enter parses</span>
     </div>
-    <div id="config-info">
-      <div class="ci-box" id="ci-backend"></div>
-      <div class="ci-box" id="ci-template"></div>
-    </div>
+    <details class="paramhelp">
+      <summary>What do the selected backend &amp; template do?</summary>
+      <div id="config-info">
+        <div class="ci-box" id="ci-backend"></div>
+        <div class="ci-box" id="ci-template"></div>
+      </div>
+    </details>
   </section>
 
   <div id="error"></div>
@@ -479,10 +500,9 @@
 
   <section class="card" id="tool-connect">
     <h2><span class="step">2</span>Find connections in a set</h2>
-    <p class="lead">Paste one requirement per line. reqgraph parses each, then links
-      any two that share a similar <b>subject</b> or <b>object</b> — a fast way to
-      spot related or duplicate requirements. Need files, quality scores or extra
-      columns? Use <b>step 3</b> below.</p>
+    <p class="lead">One requirement per line — any two that share a similar
+      <b>subject</b> or <b>object</b> get linked, exposing related and duplicate
+      requirements.</p>
     <textarea id="set-text" spellcheck="false" style="min-height:130px"></textarea>
     <div class="controls">
       <div class="ctl"><label for="set-example">Example</label>
@@ -541,21 +561,18 @@
       <span class="fg-hint">force-directed entity graph</span>
       <svg id="conngraph"></svg>
     </div>
-    <table style="margin-top:14px"><thead><tr>
+    <div class="scrollbox" style="margin-top:14px"><table><thead><tr>
         <th>Requirement A</th><th style="width:90px">Role</th><th>Match</th>
         <th>Requirement B</th><th style="width:70px">Score</th>
-      </tr></thead><tbody id="set-tbody"></tbody></table>
+      </tr></thead><tbody id="set-tbody"></tbody></table></div>
   </section>
 
   <!-- ── Import & analyze ───────────────────────────────────────────── -->
   <section class="card" id="tool-import">
     <h2><span class="step">3</span>Import &amp; analyze a set</h2>
-    <p class="lead">The full pipeline over a whole document: parse every
-      requirement, score its <b>quality</b> (weak words, atomicity, EARS pattern,
-      type) and find cross-requirement connections. Upload a file
-      (<b>CSV / Excel / JSON / ReqIF</b>) or paste text — extra columns like
-      <em>rationale</em> or <em>applicability</em> are detected and kept in every
-      download.</p>
+    <p class="lead">The full pipeline over a whole document — quality scores,
+      connections and downloads. Upload <b>CSV / Excel / JSON / ReqIF</b> or paste
+      text; extra columns (rationale, applicability…) are kept throughout.</p>
     <div class="tab-btns">
       <button class="tab-btn active" id="exp-tab-paste" onclick="expTab('paste')">&#128203; Paste text</button>
       <button class="tab-btn" id="exp-tab-file" onclick="expTab('file')">&#128193; Upload file</button>
@@ -649,7 +666,7 @@
       <span class="fg-hint">force-directed entity graph</span>
       <svg id="exp-conngraph"></svg>
     </div>
-    <div style="overflow-x:auto">
+    <div class="scrollbox">
       <table id="exp-table">
         <thead id="exp-thead"></thead>
         <tbody id="exp-tbody"></tbody>
@@ -684,12 +701,8 @@
   <!-- ── Compare Model vs Requirements ──────────────────────────── -->
   <section class="card" id="tool-compare2">
     <h2><span class="step">4</span>Compare a SysML v2 model</h2>
-    <p class="lead">Check how well a <b>SysML v2 model</b> and your <b>requirements</b>
-      line up. Model elements (parts, actions, states, attributes) are matched to the
-      IREB roles in each requirement, giving a <b>semantic match %</b>,
-      <b>model coverage</b> (elements traced to requirements), <b>requirement
-      coverage</b> (requirements reflected in the model), and a gap list for both
-      sides.</p>
+    <p class="lead">Match model elements against requirement roles — semantic
+      match %, coverage both ways, and the gap lists on each side.</p>
     <div class="cmp-two-col">
       <div>
         <div class="ctl" style="margin-bottom:6px">
@@ -775,7 +788,7 @@
     <p class="cmp-section-head">Matches
       <span id="cmp-match-count" style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--muted)"></span>
     </p>
-    <div style="overflow-x:auto;margin-bottom:16px">
+    <div class="scrollbox" style="margin-bottom:16px">
       <table>
         <thead><tr>
           <th>Model element</th><th style="width:100px">Role</th>
@@ -800,11 +813,9 @@
   <!-- ── Compare SysML v1 Model (XMI / Turtle) vs Requirements ──────────── -->
   <section class="card" id="tool-compare1">
     <h2><span class="step">5</span>Compare a SysML v1 model</h2>
-    <p class="lead">For older <b>SysML v1</b> models exported as <b>XMI</b> (MagicDraw,
-      Cameo, Papyrus) or <b>Turtle/RDF</b>. Unlike step 4, each element is scored by
-      its <b>graph neighborhood</b>, not just its name — so a block surrounded by
-      telling parts and links matches better than its bare label. Pick the model
-      format below, paste your requirements, and compare.</p>
+    <p class="lead"><b>XMI</b>, <b>Turtle/RDF</b> or a native <b>Cameo .mdzip</b> —
+      scored by each element's graph neighborhood, with the certification RVTM
+      (Verified / Candidate / Gap) in the results.</p>
 
     <!-- Format tabs -->
     <div style="display:flex;gap:8px;margin-bottom:8px;">
@@ -926,7 +937,7 @@
         <button class="ghost" onclick="dlV1('rvtm_graphml')">RVTM GraphML</button>
       </div>
     </div>
-    <div style="overflow-x:auto;margin-bottom:12px">
+    <div class="scrollbox" style="margin-bottom:12px">
       <table style="font-size:.86rem">
         <thead><tr>
           <th>Req ID</th><th>Requirement</th><th>Allocated element</th>
@@ -957,7 +968,7 @@
     </div>
 
     <div class="cmp-section-head">Matches — Confidence Decomposition</div>
-    <div style="overflow-x:auto;margin-bottom:16px">
+    <div class="scrollbox" style="margin-bottom:16px">
       <table style="border-collapse:collapse;width:100%;font-size:.85rem">
         <thead><tr>
           <th style="text-align:left;padding:4px 8px">Model element</th>

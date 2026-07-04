@@ -244,7 +244,11 @@ class RequirementAnalyzer:
                  tokenizer_name: Optional[str] = None,
                  device: Optional[str] = None, max_len: int = 64):
         self.model_name = model_name
-        self.tokenizer_name = tokenizer_name or "bert-base-uncased"
+        # None = resolve at load time: prefer the model's own tokenizer (this is
+        # what makes a local --embedding-model directory fully offline-capable),
+        # fall back to the standard bert-base-uncased vocab for repos that ship
+        # no tokenizer (e.g. prajjwal1/bert-tiny).
+        self.tokenizer_name = tokenizer_name
         self.max_len = max_len
         self._device = device
         self._tok = None
@@ -258,7 +262,13 @@ class RequirementAnalyzer:
         import torch
         from transformers import AutoModel, AutoTokenizer, BertConfig
         self._torch = torch
-        self._tok = AutoTokenizer.from_pretrained(self.tokenizer_name)
+        if self.tokenizer_name:
+            self._tok = AutoTokenizer.from_pretrained(self.tokenizer_name)
+        else:
+            try:
+                self._tok = AutoTokenizer.from_pretrained(self.model_name)
+            except Exception:
+                self._tok = AutoTokenizer.from_pretrained("bert-base-uncased")
         config = BertConfig.from_pretrained(self.model_name)
         self._model = AutoModel.from_pretrained(self.model_name, config=config)
         self._device = self._device or ("cuda" if torch.cuda.is_available() else "cpu")
