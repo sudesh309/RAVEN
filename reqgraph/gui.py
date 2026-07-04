@@ -159,6 +159,15 @@ class GuiState:
             pass
         return avail
 
+    @staticmethod
+    def embedding_available() -> bool:
+        """True when the 'embedding' similarity can run (torch + transformers
+        + numpy importable). Used by the GUI to grey the option out instead of
+        letting a request fail."""
+        import importlib.util
+        return all(importlib.util.find_spec(m) is not None
+                   for m in ("torch", "transformers", "numpy"))
+
     def extractor(self, name: str):
         with self._lock:
             if name not in self._extractors:
@@ -224,6 +233,14 @@ def _build_set_graph(state, items, payload, warnings):
             "the 'embedding' similarity needs PyTorch + transformers installed "
             f"({exc}); switch Similarity back to 'lexical', which needs no extra "
             "packages") from exc
+    except OSError as exc:
+        if similarity != "embedding":
+            raise
+        raise ReqGraphError(
+            "the embedding model could not be loaded — it downloads from "
+            f"HuggingFace on first use, which needs network access ({exc}); "
+            "pre-download it once on a connected machine, or switch Similarity "
+            "back to 'lexical'") from exc
     return rsg, template, backend, similarity, threshold
 
 
@@ -597,6 +614,13 @@ def compare_request(state: GuiState, payload: dict) -> dict:
         raise ReqGraphError(
             "the 'embedding' similarity needs PyTorch + transformers installed "
             f"({exc}); switch Similarity back to 'lexical'") from exc
+    except OSError as exc:
+        if similarity != "embedding":
+            raise
+        raise ReqGraphError(
+            "the embedding model could not be loaded — it downloads from "
+            f"HuggingFace on first use, which needs network access ({exc}); "
+            "switch Similarity back to 'lexical'") from exc
 
     warnings.extend(report.warnings)
 
@@ -746,6 +770,13 @@ def compare_v1_request(state: GuiState, payload: dict) -> dict:
         raise ReqGraphError(
             "the 'embedding' similarity needs PyTorch + transformers installed "
             f"({exc}); switch Similarity back to 'lexical'") from exc
+    except OSError as exc:
+        if similarity != "embedding":
+            raise
+        raise ReqGraphError(
+            "the embedding model could not be loaded — it downloads from "
+            f"HuggingFace on first use, which needs network access ({exc}); "
+            "switch Similarity back to 'lexical'") from exc
 
     warnings.extend(report.warnings)
 
@@ -874,6 +905,7 @@ class _Handler(BaseHTTPRequestHandler):
                              "backend_info": BACKEND_INFO,
                              "template_info": {n: template_info(n)
                                                for n in sorted(TEMPLATES)},
+                             "embedding_available": self.state.embedding_available(),
                              "version": __version__})
         else:
             self.send_error(404)

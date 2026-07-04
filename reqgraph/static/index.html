@@ -1076,6 +1076,21 @@ async function boot(){
       if(e.key==="Enter" && (e.ctrlKey||e.metaKey)) parse(); });
   $("text").value = EXAMPLES[0];
   renderConfigInfo();
+  // grey out the BERT-embedding similarity everywhere when torch/transformers
+  // aren't installed — selecting it would only ever produce an error
+  if(info.embedding_available === false){
+    for(const id of ["set-similarity","exp-similarity","cmp-sim","v1-sim"]){
+      const sel = $(id);
+      if(!sel) continue;
+      const opt = [...sel.options].find(o => o.value === "embedding");
+      if(!opt) continue;
+      opt.disabled = true;
+      opt.textContent += " — unavailable";
+      sel.title = "BERT embedding needs PyTorch + transformers: " +
+                  "pip install reqgraph[ml]";
+      if(sel.value === "embedding") sel.value = "lexical";
+    }
+  }
   parse();
   // now that the template/backend selectors are populated, run the worked
   // example pre-loaded into every other section so each one shows live output

@@ -588,6 +588,29 @@ def test_gui_connections_entity_graph_shape():
     assert any(e["role"] == "SUBJECT" for e in ents["edges"])
 
 
+def test_gui_info_reports_embedding_availability():
+    """/api/info tells the browser whether 'embedding' similarity can run, so
+    the GUI can grey the option out instead of letting the request fail."""
+    import importlib.util
+    import json as _json
+    import threading
+    import urllib.request
+    from reqgraph.gui import GuiState, make_server
+    expected = all(importlib.util.find_spec(m) is not None
+                   for m in ("torch", "transformers", "numpy"))
+    assert GuiState.embedding_available() is expected
+    server = make_server(port=0)
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        info = _json.loads(urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/api/info", timeout=10).read())
+        assert info["embedding_available"] is expected
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_gui_serves_roadmap_page():
     """/roadmap.html serves the constraints & roadmap page; unknown paths 404."""
     import threading
