@@ -262,15 +262,37 @@ class RequirementAnalyzer:
         import torch
         from transformers import AutoModel, AutoTokenizer, BertConfig
         self._torch = torch
-        if self.tokenizer_name:
-            self._tok = AutoTokenizer.from_pretrained(self.tokenizer_name)
-        else:
+
+        # Candidate sources in order. When the default hub model can't be
+        # reached (offline / firewalled), fall back to the locally trained
+        # requirement tagger — it is a BERT encoder with its own tokenizer,
+        # fine-tuned on requirements, so it embeds them at least as well.
+        candidates = [self.model_name]
+        if self.model_name == "prajjwal1/bert-tiny":
+            import os
+            local = os.path.join("models", "req_tagger")
+            if os.path.isdir(local):
+                candidates.append(local)
+
+        last_exc = None
+        for cand in candidates:
             try:
-                self._tok = AutoTokenizer.from_pretrained(self.model_name)
-            except Exception:
-                self._tok = AutoTokenizer.from_pretrained("bert-base-uncased")
-        config = BertConfig.from_pretrained(self.model_name)
-        self._model = AutoModel.from_pretrained(self.model_name, config=config)
+                if self.tokenizer_name:
+                    tok = AutoTokenizer.from_pretrained(self.tokenizer_name)
+                else:
+                    try:
+                        tok = AutoTokenizer.from_pretrained(cand)
+                    except Exception:
+                        tok = AutoTokenizer.from_pretrained("bert-base-uncased")
+                config = BertConfig.from_pretrained(cand)
+                model = AutoModel.from_pretrained(cand, config=config)
+            except Exception as exc:          # try the next candidate
+                last_exc = exc
+                continue
+            self._tok, self._model = tok, model
+            break
+        else:
+            raise last_exc
         self._device = self._device or ("cuda" if torch.cuda.is_available() else "cpu")
         self._model.to(self._device)
         self._model.eval()
