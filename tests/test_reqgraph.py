@@ -274,6 +274,103 @@ def test_compound_requirement_smell():
     assert check_quality("The system shall not transmit.")["compound_requirement"] is False
 
 
+# --- completeness (INCOSE GtWR C4 "complete") -------------------------------
+
+def _completeness(text):
+    from reqgraph.quality import enrich
+    return enrich(RequirementParser(RUPP_TEMPLATE).parse(text)).analysis["completeness"]
+
+
+@pytest.mark.parametrize("text", [
+    "The flight management system shall calculate the optimal cruise altitude.",
+    "When the cabin altitude exceeds 14,000 feet, the oxygen system shall deploy "
+    "the passenger oxygen masks within 4 seconds.",
+    "The display shall show the airspeed to the pilot.",
+    "The brake controller shall apply pressure at 100 psi.",
+    "The system shall support up to 4 concurrent users.",
+])
+def test_well_formed_requirements_are_complete(text):
+    """No false positives: thousands separators, folded objects and counts are fine."""
+    c = _completeness(text)
+    assert c["complete"] is True, c["missing"]
+    assert c["n_blockers"] == 0
+
+
+def test_placeholder_blocks_the_requirement():
+    for text in ("The system shall log TBD events.",
+                 "The system shall retry TBC times.",
+                 "The system shall store the data for <duration>."):
+        c = _completeness(text)
+        assert c["placeholder"] is True, text
+        assert c["n_blockers"] >= 1 and c["complete"] is False
+
+
+def test_dangling_pronoun_subject_is_not_self_contained():
+    c = _completeness("It shall be closed automatically.")
+    assert c["dangling_reference"] is True and c["complete"] is False
+    # naming the system explicitly clears it
+    assert _completeness("The valve shall be closed automatically.")["dangling_reference"] is False
+
+
+def test_value_without_unit_is_incomplete():
+    c = _completeness("The navigation system shall respond within 4.")
+    assert c["number_without_unit"] is True and c["complete"] is False
+    # the same value with a dimension is fine, and 14,000 is not two numbers
+    assert _completeness(
+        "The navigation system shall respond within 4 seconds.")["number_without_unit"] is False
+    assert _completeness(
+        "The system shall climb to 14,000 feet.")["number_without_unit"] is False
+
+
+def test_truncated_text_is_flagged():
+    assert _completeness("The autopilot shall maintain the heading and")["truncated"] is True
+    assert _completeness("The autopilot shall maintain the heading.")["truncated"] is False
+
+
+def test_missing_structural_roles_are_blockers():
+    from reqgraph.quality import check_completeness
+    # no modality at all -> not binding
+    c = check_completeness("The system closes the valve.")
+    assert c["no_modality"] is True and c["n_blockers"] >= 1
+
+
+def test_completeness_score_and_severity_ordering():
+    blocked = _completeness("The system shall log TBD events.")
+    gaps = _completeness("The navigation system shall respond within 4.")
+    clean = _completeness("The display shall show the airspeed to the pilot.")
+    assert blocked["severity"] == "blocker"
+    assert gaps["severity"] == "major"
+    assert clean["severity"] is None and clean["score"] == 100
+    assert blocked["score"] < gaps["score"] < clean["score"]
+    # every finding carries an actionable hint
+    for f in blocked["missing"] + gaps["missing"]:
+        assert f["hint"] and f["severity"] in ("blocker", "major", "minor")
+
+
+def test_gui_export_reports_set_completeness():
+    """The import pipeline rolls per-requirement completeness up to the set."""
+    pytest.importorskip("pandas")
+    from reqgraph.gui import GuiState, export_request
+    csv = ("id,text\n"
+           "R1,The display shall show the airspeed to the pilot.\n"
+           "R2,The system shall log TBD events.\n"
+           "R3,It shall be closed automatically.\n")
+    d = export_request(GuiState(), {"content": csv, "format": "csv"})
+    c = d["completeness"]
+    assert c["n_requirements"] == 3
+    assert c["blocked_ids"] == ["R2"] and c["incomplete_ids"] == ["R3"]
+    assert c["n_complete"] == 1 and c["pct_complete"] == pytest.approx(33.3)
+    keys = {f["key"]: f for f in c["by_finding"]}
+    assert keys["placeholder"]["severity"] == "blocker"
+    assert keys["placeholder"]["req_ids"] == ["R2"]
+    # blockers sort ahead of majors so a set can be triaged top-down
+    assert c["by_finding"][0]["severity"] == "blocker"
+    # and each row carries its own verdict for the table
+    rows = {r["id"]: r for r in d["requirements"]}
+    assert rows["R1"]["complete"] is True and rows["R2"]["complete"] is False
+    assert "TBD" in rows["R2"]["missing"]
+
+
 # --- batch I/O -------------------------------------------------------------
 
 def test_reqif_roundtrip():
