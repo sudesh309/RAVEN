@@ -395,7 +395,9 @@ class RequirementSetGraph:
 
         Column order mirrors :func:`reqgraph.io_formats.requirements_to_dataframe`:
         ``id, text, <metadata...>, type, ears_pattern, roundtrip_ok, error,
-        <elements...>, weak_words, non_atomic``.
+        <elements...>, weak_words, non_atomic``, then the completeness verdict
+        (``complete, completeness_score, missing``) so a downloaded quality
+        table can be triaged without re-running the tool.
         """
         import pandas as pd
 
@@ -427,6 +429,10 @@ class RequirementSetGraph:
                 row[r.value.lower()] = " | ".join(bucket.get(r.value, []))
             row["weak_words"] = ", ".join(q.get("weak_words", []))
             row["non_atomic"] = q.get("non_atomic", "")
+            c = g.analysis.get("completeness", {})
+            row["complete"] = c.get("complete", "")
+            row["completeness_score"] = c.get("score", "")
+            row["missing"] = "; ".join(f["label"] for f in c.get("missing", []))
             rows.append(row)
         return pd.DataFrame(rows)
 

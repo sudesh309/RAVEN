@@ -50,8 +50,12 @@ def _read_items(path):
         sys.exit(f"error: input file not found: {path}")
     ext = os.path.splitext(path)[1].lower()
     def _read_plain_text(path):
+        # same (id, text, metadata) shape as every other reader, so callers can
+        # destructure uniformly -- returning bare strings here silently unpacked
+        # each line into characters.
         with open(path, encoding="utf-8") as fh:
-            return [ln.strip() for ln in fh if ln.strip()]
+            lines = [ln.strip() for ln in fh if ln.strip()]
+        return [(f"R{i}", ln, {}) for i, ln in enumerate(lines, 1)]
 
     readers = {".csv": read_requirements_csv, ".json": read_requirements_json,
                ".xlsx": read_requirements_excel, ".xls": read_requirements_excel,
@@ -321,17 +325,31 @@ def cmd_analyze(args):
     texts = [t for _id, t, *_ in items]
     print(f"loaded {len(texts)} requirements from {args.infile}\n")
 
-    # per-requirement quality / type / EARS
+    # per-requirement quality / completeness / type / EARS
     p = RequirementParser(RUPP_TEMPLATE)
-    print("== quality / type / EARS ==")
+    print("== quality / completeness / type / EARS ==")
+    n_blocked = n_gaps = 0
     for (rid, text, *_) in items:
         g = enrich(p.parse(text))
         q = g.analysis["quality"]
+        c = g.analysis["completeness"]
         smells = [k for k, v in q.items() if v and k != "weak_words"]
         if q["weak_words"]:
             smells.append("weak_words=" + ",".join(q["weak_words"]))
+        if c["n_blockers"]:
+            n_blocked += 1
+        elif not c["complete"]:
+            n_gaps += 1
+        verdict = ("BLOCKED" if c["n_blockers"] else
+                   "GAPS" if not c["complete"] else "complete")
         print(f"[{rid or '?'}] type={g.analysis['type']}, "
               f"ears={g.analysis['ears_pattern']}, smells={smells or 'none'}")
+        print(f"      completeness: {verdict} ({c['score']}/100)"
+              + (f" — {'; '.join(f['label'] for f in c['missing'])}"
+                 if c["missing"] else ""))
+    ready = len(items) - n_blocked - n_gaps
+    print(f"\n-- completeness: {ready}/{len(items)} ready for design, "
+          f"{n_gaps} with gaps, {n_blocked} blocked --")
 
     # embedding-based duplicates / conflicts (optional)
     try:

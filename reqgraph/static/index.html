@@ -47,6 +47,7 @@
           text-transform:uppercase;margin-top:2px}
   .kpi .d{font-size:11.5px;color:var(--muted);margin-top:2px;min-height:0}
   .kpi.good .v{color:var(--ok)} .kpi.bad .v{color:var(--bad)}
+  .kpi.warn .v{color:#B25313}
   #tiles{font-size:16.5px;line-height:2.1;word-wrap:break-word}
   #tiles span.el{padding:3px 4px;border-radius:5px;border-bottom:2px solid}
   #legend{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
@@ -109,7 +110,7 @@
     color:#fff;font-weight:600}
   .tab-btn:hover:not(.active){border-color:var(--accent);color:var(--accent)}
   #exp-connwrap{overflow-x:auto;margin-bottom:16px}
-  .qty-ok{color:var(--ok)} .qty-bad{color:var(--bad)}
+  .qty-ok{color:var(--ok)} .qty-bad{color:var(--bad)} .qty-warn{color:#B25313}
   #exp-warn,#set-warn{display:none;background:#FBF3E2;color:#7A5A12;
     border:1px solid #ECD9A6;border-radius:8px;padding:9px 13px;font-size:13.5px}
   #exp-warn ul,#set-warn ul{margin:4px 0 0;padding-left:20px}
@@ -652,6 +653,7 @@
       </div>
     </div>
     <div id="exp-summary" style="margin:6px 0 12px;color:var(--muted);font-size:13px"></div>
+    <div id="exp-completeness"></div>
     <div class="graph-legend" id="exp-graph-legend">
       <span class="ll" style="color:var(--muted)">Bigger node = more links · thicker
         line = stronger match · use the controls to recolour &amp; filter ·
@@ -1196,6 +1198,10 @@ function renderKpis(k){
     kpiCard(k.quality_score, "quality score",
             k.smells.length ? k.smells.join(", ") : "no smells",
             k.quality_score >= 80 ? "good" : (k.quality_score >= 50 ? "" : "bad")) +
+    kpiCard(k.complete ? "&#10003; complete" : "&#9888; incomplete", "completeness",
+            (k.missing||[]).length ? k.missing.map(m => m.label).join(", ")
+                                   : "fully stated, self-contained",
+            k.complete ? "good" : (k.completeness_severity === "blocker" ? "bad" : "warn")) +
     kpiCard(k.n_elements, "elements", `${k.coverage_pct}% text coverage`) +
     kpiCard(k.type, "type", "IREB classification") +
     kpiCard(k.ears_pattern.split(" ")[0], "EARS", k.ears_pattern) +
@@ -1969,8 +1975,62 @@ function renderExportResults(d){
   }
   // the color legend only makes sense once there's a graph to read
   $("exp-graph-legend").style.display = (d.n_requirements >= 2) ? "flex" : "none";
+  renderCompleteness(d.completeness);
   renderExportGraph(d);
   renderExportTable(d);
+}
+
+// Set-level readiness: how much of this baseline can go to design as written,
+// and which recurring gaps to fix first (blockers before majors before minors).
+const SEV_UI = {
+  blocker: {c:"var(--bad)",  bg:"#FBECEC", t:"blocker", d:"cannot be designed or verified as written"},
+  major:   {c:"#B25313",     bg:"#FBF3E2", t:"major",   d:"designable, but not yet self-contained or verifiable"},
+  minor:   {c:"var(--muted)",bg:"var(--bg)",t:"minor",  d:"usable; tightening removes residual risk"},
+};
+function renderCompleteness(c){
+  const box = $("exp-completeness");
+  if(!c || !c.n_requirements){ box.innerHTML = ""; return; }
+  const pct = c.pct_complete;
+  const tone = pct >= 90 ? "var(--ok)" : (pct >= 60 ? "#B25313" : "var(--bad)");
+  const bar = `<div style="display:flex;height:9px;border-radius:99px;overflow:hidden;
+      background:var(--border);margin:10px 0 12px">
+    <div style="width:${pct}%;background:var(--ok)" title="ready for design"></div>
+    <div style="width:${100*c.n_incomplete/c.n_requirements}%;background:#E5A54B"
+         title="gaps: not yet verifiable"></div>
+    <div style="width:${100*c.n_blocked/c.n_requirements}%;background:var(--bad)"
+         title="blocked: cannot be designed as written"></div></div>`;
+  const findings = c.by_finding.map(f => {
+    const s = SEV_UI[f.severity];
+    return `<tr>
+      <td style="white-space:nowrap"><span style="font-size:10.5px;font-weight:700;
+        text-transform:uppercase;letter-spacing:.04em;padding:2px 8px;border-radius:99px;
+        color:${s.c};background:${s.bg}">${s.t}</span></td>
+      <td><b>${esc(f.key.replace(/_/g," "))}</b> <span style="color:var(--muted)">— ${esc(f.hint)}</span></td>
+      <td style="text-align:right;white-space:nowrap"><b>${f.count}</b></td>
+      <td style="color:var(--muted);font-size:11.5px">${f.req_ids.map(esc).join(", ")}</td>
+    </tr>`;}).join("");
+  box.innerHTML = `
+    <div class="card" style="padding:14px 16px;margin:0 0 14px">
+      <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+        <b style="font-size:14px">Completeness — is this baseline ready for design?</b>
+        <span style="color:var(--muted);font-size:12px">INCOSE GtWR C4: each requirement
+          fully stated in one place</span>
+        <span style="margin-left:auto;font-size:22px;font-weight:700;color:${tone}">${pct}%</span>
+      </div>
+      ${bar}
+      <div style="display:flex;gap:18px;font-size:12.5px;flex-wrap:wrap">
+        <span><b style="color:var(--ok)">${c.n_complete}</b> ready for design</span>
+        <span><b style="color:#B25313">${c.n_incomplete}</b> gaps</span>
+        <span><b style="color:var(--bad)">${c.n_blocked}</b> blocked</span>
+        <span style="color:var(--muted)">avg score ${c.avg_score}</span>
+      </div>
+      ${findings ? `<table style="margin-top:12px;font-size:12.5px"><thead><tr>
+          <th style="width:74px">severity</th><th>what is missing</th>
+          <th style="width:44px;text-align:right">reqs</th><th style="width:34%">which</th>
+        </tr></thead><tbody>${findings}</tbody></table>`
+      : `<div style="margin-top:10px;color:var(--ok);font-size:12.5px">
+           &#10003; every requirement is fully stated — nothing blocking handoff to design.</div>`}
+    </div>`;
 }
 
 let expFG = null;
@@ -1985,14 +2045,15 @@ function renderExportTable(d){
   // discover all columns from the first req object
   const metaKeys = [];
   const standard = new Set(["id","text","type","ears_pattern","weak_words","non_atomic",
-    "subject","object","condition","process","constraint"]);
+    "subject","object","condition","process","constraint",
+    "complete","completeness_score","completeness_severity","missing"]);
   const first = d.requirements[0];
   for(const k of Object.keys(first)){
     if(!standard.has(k)) metaKeys.push(k);
   }
   const showCols = ["id","text",...metaKeys,"type","ears_pattern",
                     "condition","subject","object","process","constraint",
-                    "weak_words","non_atomic"];
+                    "weak_words","non_atomic","complete","missing"];
   const hdrs = showCols.map(k => `<th>${esc(k.replace(/_/g," "))}</th>`).join("");
   $("exp-thead").innerHTML = `<tr>${hdrs}</tr>`;
   $("exp-tbody").innerHTML = d.requirements.map(r => {
@@ -2005,6 +2066,14 @@ function renderExportTable(d){
           background:var(--accent-soft);border:1px solid #d9d6f5;color:var(--accent)">${esc(v)}</span></td>`;
       if(k === "weak_words" && v)
         return `<td><span class="qty-bad">${esc(v)}</span></td>`;
+      if(k === "complete"){
+        const sev = r.completeness_severity;
+        if(v) return `<td><span class="qty-ok">&#10003; ${r.completeness_score}</span></td>`;
+        return `<td><span class="${sev==="blocker"?"qty-bad":"qty-warn"}">` +
+               `${sev==="blocker"?"&#9679; blocked":"&#9888; gaps"} ${r.completeness_score}</span></td>`;
+      }
+      if(k === "missing" && v)
+        return `<td><span class="qty-warn">${esc(v)}</span></td>`;
       return `<td>${esc(String(v))}</td>`;
     }).join("");
     return `<tr>${cells}</tr>`;

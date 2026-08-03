@@ -285,6 +285,7 @@ def _compute_kpis(g, text: str, parse_ms: float) -> dict:
     weak = list(q.get("weak_words", []))
     score = max(0, 100 - 20 * len(smells) - 10 * len(weak))
     smells += [f"weak word: {w}" for w in weak]
+    comp = g.analysis.get("completeness", {})
     modality = next((n for n in elements if n.role is Role.MODALITY), None)
     n_actions = sum(1 for n in g.nodes.values() if n.role is Role.ACTION)
     op = next((n for n in g.nodes.values() if n.role is Role.OPERATOR), None)
@@ -295,12 +296,57 @@ def _compute_kpis(g, text: str, parse_ms: float) -> dict:
         "coverage_pct": round(100.0 * sem_chars / len(text), 1) if text else 0.0,
         "quality_score": score,
         "smells": smells,
+        "complete": comp.get("complete", True),
+        "completeness_score": comp.get("score", 100),
+        "completeness_severity": comp.get("severity"),
+        "missing": comp.get("missing", []),
         "type": g.analysis.get("type", ""),
         "ears_pattern": g.analysis.get("ears_pattern", ""),
         "obligation": (modality.attrs.get("obligation", "") if modality else "none"),
         "n_actions": n_actions,
         "operator": (op.attrs.get("operator") if op else None),
         "n_words": len(text.split()),
+    }
+
+
+def _completeness_summary(rsg) -> dict:
+    """Set-level completeness roll-up: how much of this baseline is ready to
+    hand to design, and what is blocking the rest.
+
+    ``blocked`` requirements cannot be designed or verified as written;
+    ``incomplete`` ones are designable but not yet self-contained/verifiable.
+    ``by_finding`` ranks the recurring gaps so a set can be fixed by theme
+    rather than row by row.
+    """
+    by_finding: dict[str, dict] = {}
+    blocked, incomplete, scores = [], [], []
+    for rid in rsg.req_ids:
+        c = rsg.graphs[rid].analysis.get("completeness", {})
+        scores.append(c.get("score", 100))
+        if c.get("n_blockers"):
+            blocked.append(rid)
+        elif not c.get("complete", True):
+            incomplete.append(rid)
+        for f in c.get("missing", []):
+            slot = by_finding.setdefault(
+                f["key"], {"key": f["key"], "severity": f["severity"],
+                           "hint": f["hint"], "count": 0, "req_ids": []})
+            slot["count"] += 1
+            if len(slot["req_ids"]) < 25:
+                slot["req_ids"].append(rid)
+    n = len(rsg.req_ids)
+    order = {"blocker": 0, "major": 1, "minor": 2}
+    return {
+        "n_requirements": n,
+        "n_complete": n - len(blocked) - len(incomplete),
+        "n_blocked": len(blocked),
+        "n_incomplete": len(incomplete),
+        "pct_complete": round(100.0 * (n - len(blocked) - len(incomplete)) / n, 1) if n else 0.0,
+        "avg_score": round(sum(scores) / n, 1) if n else 0.0,
+        "blocked_ids": blocked,
+        "incomplete_ids": incomplete,
+        "by_finding": sorted(by_finding.values(),
+                             key=lambda f: (order[f["severity"]], -f["count"])),
     }
 
 
@@ -490,6 +536,7 @@ def export_request(state: GuiState, payload: dict) -> dict:
     for rid in rsg.req_ids:
         g = rsg.graphs[rid]
         q = g.analysis.get("quality", {})
+        c = g.analysis.get("completeness", {})
         meta = rsg.metadata.get(rid, {})
         row = {"id": rid, "text": rsg.texts[rid]}
         for k, col in meta_cols.items():
@@ -497,7 +544,11 @@ def export_request(state: GuiState, payload: dict) -> dict:
         row.update({"type": g.analysis.get("type", ""),
                     "ears_pattern": g.analysis.get("ears_pattern", ""),
                     "weak_words": ", ".join(q.get("weak_words", [])),
-                    "non_atomic": bool(q.get("non_atomic", False))})
+                    "non_atomic": bool(q.get("non_atomic", False)),
+                    "complete": bool(c.get("complete", True)),
+                    "completeness_score": c.get("score", 100),
+                    "completeness_severity": c.get("severity"),
+                    "missing": "; ".join(f["label"] for f in c.get("missing", []))})
         # add element decomposition
         bucket = {}
         for n in g.elements():
@@ -508,6 +559,7 @@ def export_request(state: GuiState, payload: dict) -> dict:
 
     return {
         "requirements": req_rows,
+        "completeness": _completeness_summary(rsg),
         "connections": [
             {"req_a": c.a.req_id, "req_b": c.b.req_id, "role": c.role.value,
              "score": round(c.score, 4), "text_a": c.a.text, "text_b": c.b.text}
