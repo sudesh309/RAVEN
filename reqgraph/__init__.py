@@ -32,7 +32,8 @@ from .extractors import (Extractor, RuleExtractor, SpacyExtractor,
                          BertTaggerExtractor, auto_select, get_extractor)
 from .corpus import (Connection, ElementRef, RequirementSetGraph,
                      build_requirement_set_graph)
-from .io_formats import (read_requirements_json,)
+from .io_formats import (read_requirements_json, read_requirements_docx,
+                         read_reqif,)
 from .sysml_parser import SysMLElement, SysMLModel, parse_sysml, read_sysml
 from .sysml_compare import ComparisonReport, MatchDetail, compare as compare_sysml
 from .sysml_v1_parser import (V1Element, V1Relation, SysMLV1Model,
@@ -41,7 +42,8 @@ from .sysml_v1_compare import (V1MatchDetail, V1ComparisonReport, OntologyDiff,
                                 compare_v1, ontology_diff)
 from .traceability import (VerificationMethod, TraceStatus, Allocation,
                             TraceItem, Finding, TraceabilityMatrix,
-                            build_traceability_matrix, assign_verification_method)
+                            build_traceability_matrix, assign_verification_method,
+                            check_set_traceability)
 
 # library logging etiquette: emit nothing unless the application configures it
 _logging.getLogger(__name__).addHandler(_logging.NullHandler())
@@ -53,7 +55,7 @@ __all__ = [
     "Extractor", "RuleExtractor", "SpacyExtractor", "BertTaggerExtractor",
     "auto_select", "get_extractor",
     "Connection", "ElementRef", "RequirementSetGraph", "build_requirement_set_graph",
-    "read_requirements_json",
+    "read_requirements_json", "read_requirements_docx", "read_reqif",
     "SysMLElement", "SysMLModel", "parse_sysml", "read_sysml",
     "ComparisonReport", "MatchDetail", "compare_sysml",
     "V1Element", "V1Relation", "SysMLV1Model", "parse_sysml_v1", "read_sysml_v1",
@@ -61,6 +63,7 @@ __all__ = [
     "V1MatchDetail", "V1ComparisonReport", "OntologyDiff", "compare_v1", "ontology_diff",
     "VerificationMethod", "TraceStatus", "Allocation", "TraceItem", "Finding",
     "TraceabilityMatrix", "build_traceability_matrix", "assign_verification_method",
+    "check_set_traceability",
     "ReqGraphError", "GraphIntegrityError", "ExtractionError",
     "TemplateError", "DataFormatError", "ModelError",
 ]

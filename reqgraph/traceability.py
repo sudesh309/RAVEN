@@ -357,6 +357,160 @@ def _norm_id(s: str) -> str:
     return re.sub(r"[\s_]+", "", (s or "").strip().upper())
 
 
+# ---------------------------------------------------------------------------
+# Document-level traceability (no model required)
+# ---------------------------------------------------------------------------
+#
+# build_traceability_matrix() answers "is this requirement realised by the
+# design?" and needs a SysML model. Before a model exists — when an architect
+# has just loaded a Word/ReqIF/JSON specification — the question is whether the
+# *document itself* is traceable: are the IDs usable as trace anchors, do the
+# declared parent/derived-from links resolve, and is anything stranded?
+
+# metadata keys that carry an upward trace link, by relation kind
+_LINK_KEYS = {
+    "parent": ("parent", "parent_id", "parent_requirement", "parentreq",
+               "derived_from", "derivedfrom", "derives_from", "refines",
+               "trace_to", "traces_to", "upstream", "source_requirement"),
+    "satisfy": ("satisfies", "satisfy", "satisfied_by", "allocated_to",
+                "allocation", "implements"),
+    "verify": ("verified_by", "verification", "verification_method",
+               "test_case", "testcase", "verifies"),
+}
+_ID_SPLIT_RE = re.compile(r"[,;/|]+|\s{2,}")
+
+
+def _split_refs(value: str) -> list:
+    """A link cell may hold several ids ("SYS-1, SYS-2" or "SYS-1; SYS-2")."""
+    return [p.strip() for p in _ID_SPLIT_RE.split(str(value or "")) if p.strip()]
+
+
+def check_set_traceability(items, metadata=None) -> dict:
+    """Traceability health of a requirement set, from its own link metadata.
+
+    ``items`` is a sequence of ``(id, text, meta)`` triples (or an object with
+    ``req_ids``/``metadata`` like a RequirementSetGraph — pass ``metadata``
+    separately in that case).
+
+    Reports, per set:
+
+    * **identifiers** — how many requirements carry an id at all, plus any
+      duplicate ids (which silently break every downstream trace).
+    * **links** — declared parent / satisfy / verify links, how many resolve to
+      a requirement in this set, and the dangling ones that do not.
+    * **coverage** — requirements with no upward link at all (untraced), and
+      how many are verification-planned.
+    * **findings** — the same severity vocabulary the completeness check uses,
+      so both can be triaged in one list.
+    """
+    if metadata is None and hasattr(items, "req_ids"):
+        rsg = items
+        items = [(rid, rsg.texts[rid], rsg.metadata.get(rid, {})) for rid in rsg.req_ids]
+    rows = []
+    for it in items:
+        if isinstance(it, (tuple, list)):
+            rid = it[0]
+            meta = it[2] if len(it) > 2 and isinstance(it[2], dict) else {}
+        else:
+            rid, meta = None, {}
+        rows.append((rid, meta or {}))
+
+    n = len(rows)
+    known = {}                                  # normalised id -> original id
+    dupes, missing_id = [], 0
+    for rid, _ in rows:
+        if not rid or not str(rid).strip():
+            missing_id += 1
+            continue
+        key = _norm_id(str(rid))
+        if key in known:
+            dupes.append(str(rid))
+        else:
+            known[key] = str(rid)
+
+    link_counts = {k: 0 for k in _LINK_KEYS}
+    resolved = {k: 0 for k in _LINK_KEYS}
+    dangling, linked_ids, verified_ids = [], set(), set()
+
+    for rid, meta in rows:
+        norm_meta = {re.sub(r"[\s\-]+", "_", k.strip().lower()): v
+                     for k, v in meta.items()}
+        for kind, keys in _LINK_KEYS.items():
+            for key in keys:
+                if key not in norm_meta or not str(norm_meta[key]).strip():
+                    continue
+                for ref in _split_refs(norm_meta[key]):
+                    link_counts[kind] += 1
+                    if kind == "verify":
+                        verified_ids.add(rid)
+                        resolved[kind] += 1      # free text, nothing to resolve
+                        continue
+                    if _norm_id(ref) in known:
+                        resolved[kind] += 1
+                        if rid:
+                            linked_ids.add(rid)
+                    else:
+                        dangling.append({"req_id": rid, "kind": kind, "ref": ref})
+
+    n_ids = n - missing_id
+    untraced = [rid for rid, _ in rows if rid and rid not in linked_ids]
+    n_upward = link_counts["parent"] + link_counts["satisfy"]
+
+    findings = []
+
+    def add(key, label, severity, hint, count):
+        findings.append({"key": key, "label": label, "severity": severity,
+                         "hint": hint, "count": count})
+
+    if missing_id:
+        add("missing_id", f"{missing_id} requirement(s) have no identifier",
+            "blocker" if missing_id == n else "major",
+            "an unidentified requirement cannot be referenced by any trace link",
+            missing_id)
+    if dupes:
+        add("duplicate_id", f"duplicate identifiers: {', '.join(sorted(set(dupes))[:6])}",
+            "blocker", "two requirements sharing an id make every trace to it ambiguous",
+            len(dupes))
+    if dangling:
+        refs = ", ".join(sorted({d['ref'] for d in dangling})[:6])
+        add("dangling_link", f"link target(s) not in this set: {refs}",
+            "major", "the referenced requirement is missing, renamed, or lives in another document",
+            len(dangling))
+    if n_upward == 0 and n > 1:
+        add("no_trace_links", "no parent / derived-from links declared", "major",
+            "add a parent or derived_from column so the decomposition is traceable",
+            n)
+    elif untraced:
+        add("untraced", f"{len(untraced)} requirement(s) declare no upward link",
+            "minor", "top-level requirements are expected to be untraced; "
+                     "derived ones should name their parent",
+            len(untraced))
+    if link_counts["verify"] == 0 and n > 1:
+        add("no_verification", "no verification method declared on any requirement",
+            "minor", "a verified_by / verification column makes the V&V plan traceable",
+            n)
+
+    order = {"blocker": 0, "major": 1, "minor": 2}
+    findings.sort(key=lambda f: (order[f["severity"]], -f["count"]))
+    return {
+        "n_requirements": n,
+        "n_with_id": n_ids,
+        "pct_identified": round(100.0 * n_ids / n, 1) if n else 0.0,
+        "duplicate_ids": sorted(set(dupes)),
+        "n_links": sum(link_counts.values()),
+        "link_counts": link_counts,
+        "n_resolved": resolved["parent"] + resolved["satisfy"],
+        "dangling": dangling[:50],
+        "n_dangling": len(dangling),
+        "n_traced": len(linked_ids),
+        "pct_traced": round(100.0 * len(linked_ids) / n, 1) if n else 0.0,
+        "n_verification_planned": len(verified_ids),
+        "untraced_ids": untraced[:50],
+        "findings": findings,
+        "healthy": not any(f["severity"] in ("blocker", "major") for f in findings),
+    }
+
+
 def build_traceability_matrix(
     model: SysMLV1Model,
     items,

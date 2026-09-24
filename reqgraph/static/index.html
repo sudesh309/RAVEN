@@ -579,11 +579,14 @@
       <button class="tab-btn" id="exp-tab-file" onclick="expTab('file')">&#128193; Upload file</button>
     </div>
     <div id="exp-file-pane" style="display:none">
-      <input type="file" id="exp-file" accept=".csv,.xlsx,.xls,.json,.reqif,.xml"
+      <input type="file" id="exp-file" accept=".csv,.xlsx,.xls,.json,.reqif,.xml,.docx"
              style="font:inherit;cursor:pointer">
       <div class="hint" style="display:block;margin-top:6px">
-        Accepts <b>.csv .xlsx .xls .json .reqif .xml</b>. CSV/Excel need a header
-        row with a <code>text</code> column (and optionally <code>id</code>).
+        Accepts <b>.csv .xlsx .xls .json .reqif .xml .docx</b> (Word). Column names
+        are matched flexibly — <code>text</code>, <code>Requirement</code>,
+        <code>Object Text</code>, <code>Description</code>… all work, as do
+        <code>id</code>, <code>Req ID</code> and <code>Object Identifier</code>.
+        A Word file may hold a requirements table or ID-prefixed paragraphs.
       </div>
     </div>
     <div id="exp-paste-pane">
@@ -654,6 +657,7 @@
     </div>
     <div id="exp-summary" style="margin:6px 0 12px;color:var(--muted);font-size:13px"></div>
     <div id="exp-completeness"></div>
+    <div id="exp-trace"></div>
     <div class="graph-legend" id="exp-graph-legend">
       <span class="ll" style="color:var(--muted)">Bigger node = more links · thicker
         line = stronger match · use the controls to recolour &amp; filter ·
@@ -1904,9 +1908,9 @@ async function parseExport(){
     if(!fileInput.files.length){ showExpError("please choose a file"); return; }
     const file = fileInput.files[0];
     const ext = file.name.split(".").pop().toLowerCase();
-    const isBinary = ["xlsx","xls"].includes(ext);
+    const isBinary = ["xlsx","xls","docx"].includes(ext);
     const fmtMap = {csv:"csv", xlsx:"excel", xls:"excel", json:"json",
-                    reqif:"reqif", xml:"reqif"};
+                    reqif:"reqif", xml:"reqif", docx:"docx"};
     const fmt = fmtMap[ext] || "csv";
     const reader = new FileReader();
     reader.onload = async e => {
@@ -1976,8 +1980,64 @@ function renderExportResults(d){
   // the color legend only makes sense once there's a graph to read
   $("exp-graph-legend").style.display = (d.n_requirements >= 2) ? "flex" : "none";
   renderCompleteness(d.completeness);
+  renderTrace(d.traceability, d.types);
   renderExportGraph(d);
   renderExportTable(d);
+}
+
+// Traceability health of the loaded document (from its own link metadata) plus
+// the requirement-type mix — the two set-level questions an architect asks
+// right after "is it well written?".
+function renderTrace(t, types){
+  const box = $("exp-trace");
+  if(!t || !t.n_requirements){ box.innerHTML = ""; return; }
+  const stat = (v, l, tone, tip) =>
+    `<div style="flex:1;min-width:104px" title="${tip||""}"><div style="font-size:20px;font-weight:700;
+       color:${tone||"var(--text)"}">${v}</div>
+     <div style="font-size:11px;font-weight:600;letter-spacing:.04em;
+       text-transform:uppercase;color:var(--muted)">${l}</div></div>`;
+  const idTone = t.pct_identified >= 100 ? "var(--ok)" : (t.pct_identified >= 60 ? "#B25313" : "var(--bad)");
+  const findings = t.findings.map(f => {
+    const s = SEV_UI[f.severity];
+    return `<li style="margin-bottom:5px"><span style="font-size:10.5px;font-weight:700;
+      text-transform:uppercase;letter-spacing:.04em;padding:2px 8px;border-radius:99px;
+      color:${s.c};background:${s.bg}">${s.t}</span>
+      ${esc(f.label)} <span style="color:var(--muted)">— ${esc(f.hint)}</span></li>`;
+  }).join("");
+  const mix = (obj, label) => {
+    const total = Object.values(obj).reduce((a,b)=>a+b, 0) || 1;
+    return `<div style="margin-bottom:6px"><span style="font-size:11px;font-weight:600;
+      letter-spacing:.04em;text-transform:uppercase;color:var(--muted)">${label}</span><br>` +
+      Object.entries(obj).map(([k,v]) =>
+        `<span style="display:inline-block;font-size:11.5px;padding:2px 9px;margin:3px 4px 0 0;
+          border-radius:99px;background:var(--accent-soft);border:1px solid #d9d6f5;
+          color:var(--accent)">${esc(k)} <b>${v}</b> · ${Math.round(100*v/total)}%</span>`
+      ).join("") + `</div>`;
+  };
+  box.innerHTML = `
+    <div class="card" style="padding:14px 16px;margin:0 0 14px">
+      <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+        <b style="font-size:14px">Traceability &amp; type mix</b>
+        <span style="color:var(--muted);font-size:12px">link health from the document's own
+          parent / satisfies / verified-by metadata — no model needed</span>
+      </div>
+      <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:12px">
+        ${stat(t.pct_identified + "%", "have an identifier", idTone,
+               "a requirement with no id cannot be the target of a trace link")}
+        ${stat(t.link_counts.parent + t.link_counts.satisfy, "upward links",
+               null, "parent / derived-from / satisfies references")}
+        ${stat(t.n_resolved, "resolve in set", t.n_dangling ? "#B25313" : "var(--ok)",
+               "upward links whose target requirement is present in this document")}
+        ${stat(t.n_dangling, "dangling", t.n_dangling ? "var(--bad)" : "var(--muted)",
+               "referenced requirement is missing, renamed, or in another document")}
+        ${stat(t.n_verification_planned, "verification planned", null,
+               "requirements naming a verification method or test case")}
+      </div>
+      ${findings ? `<ul style="margin:0 0 12px;padding-left:2px;list-style:none;font-size:12.5px">${findings}</ul>`
+                 : `<div style="margin-bottom:12px;color:var(--ok);font-size:12.5px">
+                      &#10003; identifiers are unique and every declared link resolves.</div>`}
+      ${types ? mix(types.by_type, "requirement type") + mix(types.by_ears, "EARS pattern") : ""}
+    </div>`;
 }
 
 // Set-level readiness: how much of this baseline can go to design as written,

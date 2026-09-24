@@ -371,6 +371,240 @@ def test_gui_export_reports_set_completeness():
     assert "TBD" in rows["R2"]["missing"]
 
 
+# --- predefined-format loading (Word / JSON / ReqIF / tabular) --------------
+
+_DOCX_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+
+
+def _make_docx(path, body_xml):
+    """Write a minimal but valid .docx package (stdlib only)."""
+    import zipfile
+    ct = ('<?xml version="1.0" encoding="UTF-8"?>'
+          '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+          '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+          '<Default Extension="xml" ContentType="application/xml"/>'
+          '<Override PartName="/word/document.xml" ContentType="application/vnd.'
+          'openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+    rels = ('<?xml version="1.0" encoding="UTF-8"?>'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/'
+            '2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>')
+    doc = (f'<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="{_DOCX_NS}">'
+           f'<w:body>{body_xml}</w:body></w:document>')
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", ct)
+        z.writestr("_rels/.rels", rels)
+        z.writestr("word/document.xml", doc)
+    return path
+
+
+def _p(text):
+    return f'<w:p><w:r><w:t xml:space="preserve">{text}</w:t></w:r></w:p>'
+
+
+def _tbl(rows):
+    body = "".join("<w:tr>" + "".join(f"<w:tc>{_p(c)}</w:tc>" for c in r) + "</w:tr>"
+                   for r in rows)
+    return f"<w:tbl>{body}</w:tbl>"
+
+
+def test_docx_requirements_table(tmp_path):
+    """The common layout: a requirements table with DOORS-style headers."""
+    from reqgraph.io_formats import read_requirements_docx
+    path = _make_docx(
+        str(tmp_path / "spec.docx"),
+        _p("Drone Specification")
+        + _tbl([["Revision", "Date"], ["A", "2026-01-01"]])          # decoy table
+        + _tbl([["Object Identifier", "Object Text", "Rationale"],
+                ["SYS-001", "The drone shall maintain altitude within 2 m.", "safety"],
+                ["SYS-002", "The drone shall transmit telemetry at 10 Hz.", "ops"]]))
+    items = read_requirements_docx(path)
+    assert [i[0] for i in items] == ["SYS-001", "SYS-002"]
+    assert items[0][1].startswith("The drone shall maintain")
+    assert items[0][2] == {"rationale": "safety"}       # extra column kept
+
+
+def test_docx_id_prefixed_paragraphs(tmp_path):
+    """The other predefined layout: 'REQ-001: The system shall ...' lines."""
+    from reqgraph.io_formats import read_requirements_docx
+    path = _make_docx(
+        str(tmp_path / "paras.docx"),
+        _p("Scope") + _p("This document defines the requirements.")
+        + _p("REQ-001: The flight controller shall stabilise attitude within 100 ms.")
+        + _p("[REQ-002] The system shall abort the mission if the link is lost.")
+        + _p("Note: revisions are tracked in the change log."))
+    items = read_requirements_docx(path)
+    assert [i[0] for i in items] == ["REQ-001", "REQ-002"]
+    # narrative paragraphs without a modality are not requirements
+    assert all("change log" not in i[1] for i in items)
+
+
+def test_docx_prose_fallback_and_clear_error(tmp_path):
+    from reqgraph.errors import DataFormatError
+    from reqgraph.io_formats import read_requirements_docx
+    prose = _make_docx(str(tmp_path / "prose.docx"),
+                       _p("Overview") + _p("The camera shall capture images at 4K."))
+    assert read_requirements_docx(prose) == [(None, "The camera shall capture images at 4K.", {})]
+
+    empty = _make_docx(str(tmp_path / "empty.docx"), _p("Title") + _p("Introduction."))
+    with pytest.raises(DataFormatError, match="no requirements found"):
+        read_requirements_docx(empty)
+
+    notdocx = tmp_path / "fake.docx"
+    notdocx.write_text("I am not a zip", encoding="utf-8")
+    with pytest.raises(DataFormatError, match="not a readable"):
+        read_requirements_docx(str(notdocx))
+
+
+@pytest.mark.parametrize("header,expect_id", [
+    ("Object Identifier,Object Text", "SYS-1"),      # DOORS
+    ("Requirement ID,Description", "SYS-1"),         # Polarion / Jama
+    ("Req No,Requirement", "SYS-1"),                 # hand-written table
+    ("id,text", "SYS-1"),                            # canonical
+])
+def test_tabular_column_aliases(tmp_path, header, expect_id):
+    """An unmodified export loads without renaming its columns."""
+    pytest.importorskip("pandas")
+    from reqgraph.io_formats import read_requirements_csv
+    f = tmp_path / "r.csv"
+    f.write_text(f"{header}\nSYS-1,The system shall log errors.\n", encoding="utf-8")
+    items = read_requirements_csv(str(f))
+    assert items == [(expect_id, "The system shall log errors.", {})]
+
+
+def test_missing_text_column_names_what_it_looked_for(tmp_path):
+    pytest.importorskip("pandas")
+    from reqgraph.errors import DataFormatError
+    from reqgraph.io_formats import read_requirements_csv
+    f = tmp_path / "r.csv"
+    f.write_text("foo,bar\n1,2\n", encoding="utf-8")
+    with pytest.raises(DataFormatError, match="no requirement text column found"):
+        read_requirements_csv(str(f))
+
+
+def test_reqif_reads_xhtml_and_typed_attributes(tmp_path):
+    """DOORS/Polarion store requirement text as XHTML, not a STRING attribute."""
+    pytest.importorskip("lxml")
+    from reqgraph.io_formats import read_reqif
+    f = tmp_path / "doors.reqif"
+    f.write_text("""<?xml version="1.0" encoding="UTF-8"?>
+<REQ-IF xmlns="http://www.omg.org/spec/ReqIF/20110401/reqif.xsd"
+        xmlns:xhtml="http://www.w3.org/1999/xhtml">
+ <CORE-CONTENT><REQ-IF-CONTENT>
+  <SPEC-TYPES><SPEC-OBJECT-TYPE IDENTIFIER="SOT-1"><SPEC-ATTRIBUTES>
+    <ATTRIBUTE-DEFINITION-STRING IDENTIFIER="A-FID" LONG-NAME="ReqIF.ForeignID"/>
+    <ATTRIBUTE-DEFINITION-XHTML IDENTIFIER="A-TEXT" LONG-NAME="ReqIF.Text"/>
+    <ATTRIBUTE-DEFINITION-ENUMERATION IDENTIFIER="A-CRIT" LONG-NAME="Criticality"/>
+    <ATTRIBUTE-DEFINITION-BOOLEAN IDENTIFIER="A-SAF" LONG-NAME="Safety Related"/>
+  </SPEC-ATTRIBUTES></SPEC-OBJECT-TYPE></SPEC-TYPES>
+  <SPEC-OBJECTS><SPEC-OBJECT IDENTIFIER="SO-1"><VALUES>
+    <ATTRIBUTE-VALUE-STRING THE-VALUE="SYS-101"><DEFINITION>
+      <ATTRIBUTE-DEFINITION-STRING-REF>A-FID</ATTRIBUTE-DEFINITION-STRING-REF>
+    </DEFINITION></ATTRIBUTE-VALUE-STRING>
+    <ATTRIBUTE-VALUE-XHTML><DEFINITION>
+      <ATTRIBUTE-DEFINITION-XHTML-REF>A-TEXT</ATTRIBUTE-DEFINITION-XHTML-REF>
+     </DEFINITION><THE-VALUE><xhtml:div><xhtml:p>The oxygen system
+       <xhtml:b>shall</xhtml:b> deploy the masks</xhtml:p><xhtml:p>within 4
+       seconds.</xhtml:p></xhtml:div></THE-VALUE></ATTRIBUTE-VALUE-XHTML>
+    <ATTRIBUTE-VALUE-ENUMERATION><DEFINITION>
+      <ATTRIBUTE-DEFINITION-ENUMERATION-REF>A-CRIT</ATTRIBUTE-DEFINITION-ENUMERATION-REF>
+     </DEFINITION><VALUES><ENUM-VALUE-REF>EV-A</ENUM-VALUE-REF></VALUES>
+    </ATTRIBUTE-VALUE-ENUMERATION>
+    <ATTRIBUTE-VALUE-BOOLEAN THE-VALUE="true"><DEFINITION>
+      <ATTRIBUTE-DEFINITION-BOOLEAN-REF>A-SAF</ATTRIBUTE-DEFINITION-BOOLEAN-REF>
+    </DEFINITION></ATTRIBUTE-VALUE-BOOLEAN>
+  </VALUES></SPEC-OBJECT></SPEC-OBJECTS>
+  <DATATYPES><DATATYPE-DEFINITION-ENUMERATION IDENTIFIER="DT-C"><SPECIFIED-VALUES>
+    <ENUM-VALUE IDENTIFIER="EV-A" LONG-NAME="DAL-A"/>
+  </SPECIFIED-VALUES></DATATYPE-DEFINITION-ENUMERATION></DATATYPES>
+ </REQ-IF-CONTENT></CORE-CONTENT></REQ-IF>""", encoding="utf-8")
+    items = read_reqif(str(f))
+    assert len(items) == 1
+    rid, text, meta = items[0]
+    assert rid == "SYS-101"
+    # block boundaries become spaces, so words never run together
+    assert text == "The oxygen system shall deploy the masks within 4 seconds."
+    assert meta["criticality"] == "DAL-A"      # enum resolved to its label
+    assert meta["safety_related"] == "true"
+
+
+def test_json_dict_and_array_shapes_with_aliases(tmp_path):
+    pytest.importorskip("pandas")
+    from reqgraph.io_formats import read_requirements_json
+    arr = tmp_path / "a.json"
+    arr.write_text('[{"Requirement ID":"R1","Description":"The system shall run.",'
+                   '"parent":"R0"}]', encoding="utf-8")
+    assert read_requirements_json(str(arr)) == [
+        ("R1", "The system shall run.", {"parent": "R0"})]
+    keyed = tmp_path / "k.json"
+    keyed.write_text('{"R1": "The system shall run.", "R2": {"text": "The pump shall start."}}',
+                     encoding="utf-8")
+    assert [i[0] for i in read_requirements_json(str(keyed))] == ["R1", "R2"]
+
+
+# --- document-level traceability -------------------------------------------
+
+def test_set_traceability_flags_duplicates_and_dangling_links():
+    from reqgraph.traceability import check_set_traceability
+    items = [
+        ("SYS-1", "The drone shall fly.", {"verified_by": "TC-1"}),
+        ("SYS-2", "The drone shall land.", {"parent": "SYS-1"}),
+        ("SYS-3", "The drone shall hover.", {"derived_from": "SYS-1; SYS-9"}),
+        ("SYS-3", "The drone shall log.", {"parent": "SYS-1"}),   # duplicate id
+        (None, "The drone shall beep.", {}),                      # no id
+    ]
+    t = check_set_traceability(items)
+    assert t["duplicate_ids"] == ["SYS-3"]
+    assert t["n_with_id"] == 4 and t["pct_identified"] == 80.0
+    assert t["n_dangling"] == 1
+    assert t["dangling"][0]["ref"] == "SYS-9"     # multi-ref cell split correctly
+    assert t["n_verification_planned"] == 1
+    keys = {f["key"]: f["severity"] for f in t["findings"]}
+    assert keys["duplicate_id"] == "blocker"      # ambiguous trace anchor
+    assert keys["missing_id"] == "major"
+    assert keys["dangling_link"] == "major"
+    assert t["healthy"] is False
+    # blockers sort first so a set can be triaged top-down
+    assert t["findings"][0]["severity"] == "blocker"
+
+
+def test_set_traceability_healthy_when_links_resolve():
+    from reqgraph.traceability import check_set_traceability
+    t = check_set_traceability([
+        ("R1", "a", {"verified_by": "T1"}),
+        ("R2", "b", {"parent": "R1", "verification": "Test"}),
+    ])
+    assert t["healthy"] is True and t["n_dangling"] == 0
+    assert t["n_resolved"] == 1 and t["n_verification_planned"] == 2
+    assert all(f["severity"] == "minor" for f in t["findings"])
+
+
+def test_gui_export_reports_traceability_and_type_mix(tmp_path):
+    """Loading a Word file through the GUI yields quality, types and trace health."""
+    pytest.importorskip("pandas")
+    from reqgraph.gui import GuiState, export_request
+    import base64
+    path = _make_docx(
+        str(tmp_path / "spec.docx"),
+        _tbl([["Req ID", "Requirement", "Parent", "Verification"],
+              ["SYS-1", "The drone shall transmit telemetry at 10 Hz.", "", "Test"],
+              ["SYS-2", "The drone shall log TBD events.", "SYS-1", "Inspection"]]))
+    with open(path, "rb") as fh:
+        content = base64.b64encode(fh.read()).decode()
+    d = export_request(GuiState(), {"content": content, "format": "docx",
+                                    "encoding": "base64"})
+    assert d["n_requirements"] == 2
+    # quality + completeness
+    assert d["completeness"]["n_blocked"] == 1          # the TBD
+    # types
+    assert sum(d["types"]["by_type"].values()) == 2
+    # traceability, read from the document's own Parent/Verification columns
+    t = d["traceability"]
+    assert t["pct_identified"] == 100.0
+    assert t["n_resolved"] == 1 and t["n_dangling"] == 0
+    assert t["n_verification_planned"] == 2
+
+
 # --- batch I/O -------------------------------------------------------------
 
 def test_reqif_roundtrip():

@@ -3,7 +3,8 @@
 Convert any textual requirement into a typed semantic **graph** (nodes + edges)
 and regenerate the **exact** original text from the graph. Modular extraction
 backends (rules / spaCy / BERT), IREB/Rupp + EARS + custom templates, quality
-analysis, duplicate/conflict detection, and CSV/Excel/ReqIF batch I/O.
+analysis, completeness & traceability checks, and CSV/Excel/JSON/ReqIF/Word
+batch I/O.
 
 📖 **Full reference (every function, user guide, limitations):**
 [`docs/MANUAL.md`](docs/MANUAL.md)
@@ -43,6 +44,7 @@ Core (always): pure-Python, plus `numpy`/`networkx` for exports.
 | BERT tagger + analyzer | `pip install torch transformers` |
 | CSV / Excel | `pip install pandas openpyxl` |
 | ReqIF | `pip install lxml` |
+| Word (.docx) | none — read with the stdlib (zipfile + ElementTree) |
 | tests | `pip install pytest` |
 
 ## Quick start
@@ -474,7 +476,8 @@ read_reqif("reqs.reqif")
 ```
 
 All readers — `read_requirements_csv`, `read_requirements_excel`,
-`read_requirements_json`, `read_reqif` — return `(id, text, metadata)` triples.
+`read_requirements_json`, `read_reqif`, `read_requirements_docx` — return
+`(id, text, metadata)` triples.
 Any extra columns/attributes (e.g. **rationale**, **applicability**, **additional
 info**) are captured into `metadata` with normalised names (lowercased,
 spaces/hyphens → underscores). A source column whose name collides with a parser
@@ -486,6 +489,60 @@ from reqgraph.io_formats import read_requirements_json
 items = read_requirements_json("reqs.json")   # [{"id","text","rationale",...}] or {"R1": {...}}
 # items -> [("R1", "The system shall ...", {"rationale": "...", "applicability": "..."}), ...]
 ```
+
+### Loading real-world files (predefined formats)
+
+Requirement documents rarely use the literal headers `id` and `text`, so the
+readers match the conventions the source tools emit. Nothing needs renaming
+before import:
+
+| Source | Text column recognised as | ID column recognised as |
+|---|---|---|
+| DOORS / DNG | `Object Text`, `ReqIF.Text` | `Object Identifier`, `ReqIF.ForeignID` |
+| Polarion / Jama | `Description` | `Requirement ID` |
+| Hand-written table | `Requirement`, `Statement` | `Req No`, `Key`, `Reference` |
+| Canonical | `text` | `id` |
+
+**Word (`.docx`)** needs no extra dependency — the OOXML package is read with
+the stdlib. Two predefined layouts are recognised, and a third is a fallback:
+
+```python
+from reqgraph.io_formats import read_requirements_docx
+read_requirements_docx("spec.docx")
+```
+
+1. **Requirements table** — any table whose header names a requirement text
+   column. Extra columns (Rationale, Verification, Parent…) become metadata,
+   exactly like a CSV. Non-requirement tables (revision history, glossary) are
+   skipped automatically.
+2. **ID-prefixed paragraphs** — `REQ-001: The system shall …`, `[SYS-12] …`,
+   or `3.1.2 The system shall …`.
+3. **Prose fallback** — any paragraph containing a modality (shall/must/should),
+   so a narrative specification still imports rather than failing.
+
+**ReqIF** handles the attribute value types real tools emit: `STRING` *and*
+`XHTML` (DOORS and Polarion store the requirement text as XHTML), plus
+`ENUMERATION` (resolved to its label), `DATE`, `INTEGER`, `REAL` and `BOOLEAN`
+— all non-text attributes are preserved as metadata.
+
+### Traceability health of a document (no model required)
+
+`build_traceability_matrix` answers *"is this requirement realised by the
+design?"* and needs a SysML model. Before a model exists, the question is
+whether the **document itself** is traceable:
+
+```python
+from reqgraph import check_set_traceability
+t = check_set_traceability(items)      # (id, text, meta) triples, or a RequirementSetGraph
+t["pct_identified"]   # requirements carrying a usable trace anchor
+t["duplicate_ids"]    # blocker: two requirements sharing an id
+t["n_dangling"]       # parent/derived-from targets not present in the set
+t["findings"]         # severity-ranked, same vocabulary as the completeness check
+```
+
+Link columns are read from the document's own metadata — `parent`,
+`derived_from`, `refines`, `satisfies`, `allocated_to`, `verified_by`,
+`verification`… — and a cell may name several targets (`"SYS-1; SYS-2"`).
 
 ### One-shot export: CSV + JSON + consolidated GraphML
 
@@ -707,7 +764,7 @@ The page also includes:
   (one per line) and see the SUBJECT/OBJECT entities rendered in an interactive
   **force-directed graph** (see below), with the same knowledge-graph export
   buttons.
-* an **"Import & analyze"** panel: upload a CSV / Excel / JSON / ReqIF file (or
+* an **"Import & analyze"** panel: upload a CSV / Excel / JSON / ReqIF / Word file (or
   paste raw text), and get the per-requirement quality table (auto-discovering
   any extra metadata columns), the same force-directed entity graph, and
   one-click downloads of the CSV, JSON, and consolidated element-level GraphML.

@@ -45,7 +45,8 @@ def _build_parser(template_name, backend, model):
 def _read_items(path):
     from .errors import DataFormatError
     from .io_formats import (read_reqif, read_requirements_csv,
-                             read_requirements_excel, read_requirements_json)
+                             read_requirements_docx, read_requirements_excel,
+                             read_requirements_json)
     if not os.path.isfile(path):
         sys.exit(f"error: input file not found: {path}")
     ext = os.path.splitext(path)[1].lower()
@@ -60,10 +61,11 @@ def _read_items(path):
     readers = {".csv": read_requirements_csv, ".json": read_requirements_json,
                ".xlsx": read_requirements_excel, ".xls": read_requirements_excel,
                ".reqif": read_reqif, ".xml": read_reqif,
+               ".docx": read_requirements_docx,
                ".txt": _read_plain_text}
     if ext not in readers:
         sys.exit(f"error: unsupported input extension {ext!r}; use one of "
-                 f".csv .xlsx .xls .json .reqif .xml .txt")
+                 f".csv .xlsx .xls .json .reqif .xml .docx .txt")
     try:
         return readers[ext](path)
     except DataFormatError as exc:
@@ -329,10 +331,15 @@ def cmd_analyze(args):
     p = RequirementParser(RUPP_TEMPLATE)
     print("== quality / completeness / type / EARS ==")
     n_blocked = n_gaps = 0
+    types_seen, ears_seen = {}, {}
     for (rid, text, *_) in items:
         g = enrich(p.parse(text))
         q = g.analysis["quality"]
         c = g.analysis["completeness"]
+        rtype = g.analysis["type"]
+        pattern = (g.analysis["ears_pattern"] or "unknown").split(" ")[0]
+        types_seen[rtype] = types_seen.get(rtype, 0) + 1
+        ears_seen[pattern] = ears_seen.get(pattern, 0) + 1
         smells = [k for k, v in q.items() if v and k != "weak_words"]
         if q["weak_words"]:
             smells.append("weak_words=" + ",".join(q["weak_words"]))
@@ -350,6 +357,28 @@ def cmd_analyze(args):
     ready = len(items) - n_blocked - n_gaps
     print(f"\n-- completeness: {ready}/{len(items)} ready for design, "
           f"{n_gaps} with gaps, {n_blocked} blocked --")
+
+    # requirement-type / EARS mix -- an all-functional set is usually
+    # under-specified rather than genuinely simple
+    print("\n== type & pattern mix ==")
+    for label, counts in (("type", types_seen), ("EARS", ears_seen)):
+        total = sum(counts.values()) or 1
+        mix = ", ".join(f"{k} {v} ({100*v//total}%)"
+                        for k, v in sorted(counts.items(), key=lambda kv: -kv[1]))
+        print(f"{label:5s}: {mix}")
+
+    # traceability health from the document's own link metadata
+    from .traceability import check_set_traceability
+    tr = check_set_traceability(items)
+    print("\n== traceability ==")
+    print(f"identifiers: {tr['n_with_id']}/{tr['n_requirements']} "
+          f"({tr['pct_identified']}%) · links declared: {tr['n_links']} "
+          f"(resolved {tr['n_resolved']}, dangling {tr['n_dangling']}) · "
+          f"verification planned: {tr['n_verification_planned']}")
+    for f in tr["findings"]:
+        print(f"  [{f['severity']}] {f['label']} — {f['hint']}")
+    if not tr["findings"]:
+        print("  no traceability findings")
 
     # embedding-based duplicates / conflicts (optional)
     try:

@@ -350,6 +350,33 @@ def _completeness_summary(rsg) -> dict:
     }
 
 
+def _traceability_summary(rsg) -> dict:
+    """Trace health of the loaded document, from its own link metadata."""
+    from .traceability import check_set_traceability
+    return check_set_traceability(rsg)
+
+
+def _type_summary(rsg) -> dict:
+    """Requirement-type and EARS-pattern mix across the set.
+
+    A specification that is 90% 'functional' with no performance or interface
+    requirements is usually under-specified rather than genuinely simple, so the
+    mix is worth showing next to the quality and traceability verdicts.
+    """
+    types, ears, obligations = {}, {}, {}
+    for rid in rsg.req_ids:
+        a = rsg.graphs[rid].analysis
+        types[a.get("type", "unknown")] = types.get(a.get("type", "unknown"), 0) + 1
+        pattern = (a.get("ears_pattern") or "unknown").split(" ")[0]
+        ears[pattern] = ears.get(pattern, 0) + 1
+        mod = rsg.graphs[rid].by_role(Role.MODALITY)
+        ob = (mod[0].attrs.get("obligation", "").split(" ")[0] if mod else "none") or "none"
+        obligations[ob] = obligations.get(ob, 0) + 1
+    order = lambda d: dict(sorted(d.items(), key=lambda kv: -kv[1]))
+    return {"n_requirements": len(rsg.req_ids), "by_type": order(types),
+            "by_ears": order(ears), "by_obligation": order(obligations)}
+
+
 def _requirement_payload(parser: RequirementParser, text: str) -> dict:
     t0 = time.perf_counter()
     g = parser.parse(text)
@@ -560,6 +587,8 @@ def export_request(state: GuiState, payload: dict) -> dict:
     return {
         "requirements": req_rows,
         "completeness": _completeness_summary(rsg),
+        "traceability": _traceability_summary(rsg),
+        "types": _type_summary(rsg),
         "connections": [
             {"req_a": c.a.req_id, "req_b": c.b.req_id, "role": c.role.value,
              "score": round(c.score, 4), "text_a": c.a.text, "text_b": c.b.text}
@@ -862,16 +891,24 @@ def _read_items_from_content(content: str, fmt: str, encoding: str,
     requirement per non-blank line — the most natural thing to paste. Otherwise
     the content is written to a temp file and handed to the matching reader.
     """
-    from .io_formats import (read_requirements_csv, read_requirements_excel,
-                             read_requirements_json, read_reqif)
+    from .io_formats import (read_requirements_csv, read_requirements_docx,
+                             read_requirements_excel, read_requirements_json,
+                             read_reqif)
 
     # plain text: one requirement per line, no header required
     if fmt in _PLAIN_FORMATS and encoding != "base64":
         return [ln.strip() for ln in content.splitlines() if ln.strip()]
 
     ext_map = {"csv": ".csv", "excel": ".xlsx", "xlsx": ".xlsx", "xls": ".xls",
-               "json": ".json", "reqif": ".reqif", "xml": ".reqif"}
+               "json": ".json", "reqif": ".reqif", "xml": ".reqif",
+               "docx": ".docx", "word": ".docx", "doc": ".docx"}
     suffix = ext_map.get(fmt, ".csv")
+
+    if suffix == ".docx" and encoding != "base64":
+        raise ReqGraphError(
+            "a Word document must be uploaded as a file, not pasted — "
+            ".docx is a binary (zip) format. Use the file picker, or switch "
+            "Format to 'Plain text' to paste the requirements directly.")
 
     # decode the payload to bytes *before* creating the temp file, so a malformed
     # base64 upload fails cleanly without leaving a temp file behind.
@@ -896,6 +933,8 @@ def _read_items_from_content(content: str, fmt: str, encoding: str,
             return read_requirements_json(tmp_path)
         if suffix == ".reqif":
             return read_reqif(tmp_path)
+        if suffix == ".docx":
+            return read_requirements_docx(tmp_path)
         return read_requirements_csv(tmp_path)
     except Exception as exc:
         # The #1 mistake is pasting plain requirements while Format is CSV/Excel
