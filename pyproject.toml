@@ -24,6 +24,10 @@ nlp = ["spacy>=3.5"]
 ml = ["torch>=2.0", "transformers>=4.30", "numpy"]
 io = ["pandas>=2.0", "openpyxl", "lxml"]
 graph = ["networkx"]
+# Google Cloud Vertex AI via Application Default Credentials (optional:
+# the gcloud CLI or GOOGLE_OAUTH_ACCESS_TOKEN also work without it).
+# Ollama needs no package -- it is reached over HTTP with the stdlib.
+gcp = ["google-auth>=2.20", "requests"]
 all = ["spacy>=3.5", "torch>=2.0", "transformers>=4.30", "numpy",
        "pandas>=2.0", "openpyxl", "lxml", "networkx"]
 dev = ["pytest"]

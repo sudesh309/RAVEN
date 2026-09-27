@@ -275,6 +275,79 @@
     </div>
   </section>
 
+  <section class="card" id="f-pluscal">
+    <h2><span class="fname">6 · Formalise as PlusCal / TLA+</span>
+        <span class="status st-beta">Beta</span></h2>
+    <p class="lead">Requirement &rarr; PlusCal module + TLC config: subject as a
+      process, conditions as triggers, modality as the checked properties,
+      &ldquo;within N units&rdquo; as a deadline. Optional in-app TLC run.</p>
+    <div class="tri">
+      <div class="c-lim"><h3>Constraints</h3><ul>
+        <li>Generates a <b>reference model</b>: TLC confirms the requirement is
+          consistent as formalised. Checking a <i>design</i> means replacing the
+          reference process with your design and re-running TLC.</li>
+        <li>Only <b>upper time bounds</b> (&ldquo;within&rdquo;, &ldquo;no later
+          than&rdquo;) become checked properties. Rates, accuracies and ranges are
+          listed as <i>not formalised</i>, never silently dropped.</li>
+        <li>State conditions (WHILE / WHERE) are fixed for a run; conditions that
+          change mid-response need a richer environment.</li>
+        <li>No modality &rArr; no model: an undefined obligation is refused rather
+          than guessed. Incomplete requirements are formalised as written, with
+          a note.</li>
+        <li>Model-checking needs Java + <code>tla2tools.jar</code>
+          (<code>RAVEN_TLA2TOOLS</code>); generation does not.</li>
+      </ul></div>
+      <div class="c-wk"><h3>Workarounds</h3><ul>
+        <li>Edit the generated module to model the environment; keep the property
+          names, then re-run &ldquo;Model-check with TLC&rdquo;.</li>
+        <li>For an unformalised constraint, add a variable and an invariant over
+          it by hand.</li>
+        <li>Use <b>Refine with AI</b> for a richer environment &mdash; it is
+          rejected if it drops or changes a property.</li>
+      </ul></div>
+      <div class="c-fp"><h3>Planned</h3><ul>
+        <li>Set-level specifications: one module composing a subsystem&rsquo;s
+          requirements, so TLC finds <i>conflicts between</i> requirements.</li>
+        <li>Refinement mappings from a design model (SysML v2 state machines)
+          to the requirement properties.</li>
+      </ul></div>
+    </div>
+  </section>
+
+  <section class="card" id="f-ai">
+    <h2><span class="fname">AI assistant &mdash; Ollama (local) / Google Cloud Vertex AI</span>
+        <span class="status st-heur">Heuristic &mdash; engineer confirms</span></h2>
+    <p class="lead">Rewrite suggestions and PlusCal refinement from a local Ollama
+      model or Gemini on Vertex AI. Every output is a candidate.</p>
+    <div class="tri">
+      <div class="c-lim"><h3>Constraints</h3><ul>
+        <li>RAVEN re-scores each rewrite with its own checks, but <b>cannot verify
+          that the meaning was preserved</b> &mdash; that stays a human review.</li>
+        <li>Refined PlusCal is guarded by comparing every definition with the
+          baseline; a semantically equivalent rewording is flagged for review
+          even when it is harmless.</li>
+        <li>Output quality depends on the model; small local models on CPU are
+          slow (tens of seconds) and less reliable.</li>
+        <li>With Vertex AI, requirement text leaves the machine &mdash; choose it
+          only for data you are cleared to send. Credentials never enter the
+          page: ADC, the <code>gcloud</code> CLI, or
+          <code>GOOGLE_OAUTH_ACCESS_TOKEN</code> on the RAVEN host.</li>
+      </ul></div>
+      <div class="c-wk"><h3>Workarounds</h3><ul>
+        <li>Export-controlled data: use Ollama, or point the Vertex endpoint at
+          Private Service Connect / a sovereign-cloud host.</li>
+        <li>If a local model is slow, use a smaller one
+          (<code>ollama pull llama3.2</code>) for rewrites.</li>
+      </ul></div>
+      <div class="c-fp"><h3>Planned</h3><ul>
+        <li>RAG grounded on the programme&rsquo;s own standards and accepted
+          requirements.</li>
+        <li>Batch rewrite review queue with accept / reject persisted to the
+          baseline.</li>
+      </ul></div>
+    </div>
+  </section>
+
   <section class="card" id="f-graph">
     <h2><span class="fname">Force-directed entity graph</span>
         <span class="status st-stable">Stable</span></h2>

@@ -44,6 +44,11 @@ from .traceability import (VerificationMethod, TraceStatus, Allocation,
                             TraceItem, Finding, TraceabilityMatrix,
                             build_traceability_matrix, assign_verification_method,
                             check_set_traceability)
+from .pluscal import (PlusCalSpec, requirement_to_pluscal, requirements_to_pluscal,
+                      validate_spec)
+from .llm import (LLMError, LLMProvider, OllamaProvider, VertexAIProvider,
+                  get_provider)
+from .assist import suggest_rewrite, refine_pluscal
 
 # library logging etiquette: emit nothing unless the application configures it
 _logging.getLogger(__name__).addHandler(_logging.NullHandler())
@@ -64,6 +69,9 @@ __all__ = [
     "VerificationMethod", "TraceStatus", "Allocation", "TraceItem", "Finding",
     "TraceabilityMatrix", "build_traceability_matrix", "assign_verification_method",
     "check_set_traceability",
+    "PlusCalSpec", "requirement_to_pluscal", "requirements_to_pluscal", "validate_spec",
+    "LLMError", "LLMProvider", "OllamaProvider", "VertexAIProvider", "get_provider",
+    "suggest_rewrite", "refine_pluscal",
     "ReqGraphError", "GraphIntegrityError", "ExtractionError",
     "TemplateError", "DataFormatError", "ModelError",
 ]

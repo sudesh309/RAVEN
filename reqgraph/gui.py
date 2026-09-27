@@ -45,6 +45,18 @@ POST /api/compare-v1  {model_content, model_format?, req_content, req_format?,
                       -- context-aware comparison of a SysML v1 XMI/Turtle
                       model against a requirement set using graph neighborhood
                       context (BFS up to context_hops) + satisfaction bonus.
+POST /api/pluscal     {text, id?, template?, backend?, validate?} ->
+                      PlusCal module + TLC config, properties, element->model
+                      mapping, notes, and (validate=true) the TLC verdict
+POST /api/pluscal/validate {tla, cfg} -> pcal.trans + TLC verdict
+POST /api/llm/status  {llm?} -> AI back-end health (no billable call)
+POST /api/llm/rewrite {text, llm, template?, backend?} -> rewrite candidate,
+                      re-scored by RAVEN's quality + completeness checks
+POST /api/llm/pluscal {text, id?, llm, validate?} -> AI-refined PlusCal,
+                      guarded against dropped/changed properties + re-run TLC
+
+Every POST must be same-origin JSON (see _Handler._request_is_same_origin):
+the AI endpoints act with the user's cloud credentials.
 
 Design notes
 ------------
@@ -76,7 +88,7 @@ from .corpus import build_requirement_set_graph
 from .errors import ReqGraphError
 from .extractors import BertTaggerExtractor, RuleExtractor, SpacyExtractor
 from .parser import RequirementParser
-from .quality import enrich
+from .quality import enrich, quality_score
 from .templates import RUPP_TEMPLATE, TEMPLATES
 
 logger = logging.getLogger(__name__)
@@ -149,6 +161,31 @@ class GuiState:
         self.bert_model_dir = bert_model_dir or DEFAULT_BERT_DIR
         self._lock = threading.Lock()
         self._extractors = {"rules": RuleExtractor()}
+        self._llm = {}           # config tuple -> provider (keeps cached tokens)
+
+    def llm_provider(self, cfg: Optional[dict]):
+        """Provider for a GUI AI-settings dict (None → environment defaults).
+
+        Instances are cached per configuration so a Vertex AI access token
+        (fetched via google-auth or gcloud, which can take seconds) is reused
+        across requests. A bearer token is never accepted from the page.
+        """
+        from .llm import get_provider
+        cfg = cfg or {}
+        name = cfg.get("provider")
+        endpoint = (cfg.get("endpoint") or "").strip()
+        if endpoint:
+            from .llm import _is_loopback
+            if not (endpoint.startswith("https://") or _is_loopback(endpoint)):
+                raise ReqGraphError("a Vertex AI endpoint must use https://")
+        opts = {k: (str(cfg.get(k)).strip() if cfg.get(k) else None)
+                for k in ("model", "host", "project", "location")}
+        opts["endpoint"] = endpoint or None
+        key = (name, *sorted(opts.items()))
+        with self._lock:
+            if key not in self._llm:
+                self._llm[key] = get_provider(name, **opts)
+            return self._llm[key]
 
     def backends(self) -> dict:
         avail = {"rules": True, "spacy": False,
@@ -274,17 +311,7 @@ def _graph_to_tree(g) -> Optional[dict]:
 def _compute_kpis(g, text: str, parse_ms: float) -> dict:
     elements = g.elements()
     sem_chars = sum(len(n.text) for n in elements)
-    q = g.analysis.get("quality", {})
-    smells = [label for key, label in (
-        ("missing_modality", "missing modality"),
-        ("passive_voice", "passive voice"),
-        ("vague_quantifier", "vague quantifier"),
-        ("non_atomic", "non-atomic"),
-        ("compound_requirement", "compound requirement"))
-        if q.get(key)]
-    weak = list(q.get("weak_words", []))
-    score = max(0, 100 - 20 * len(smells) - 10 * len(weak))
-    smells += [f"weak word: {w}" for w in weak]
+    score, smells = quality_score(g.analysis.get("quality", {}))
     comp = g.analysis.get("completeness", {})
     modality = next((n for n in elements if n.role is Role.MODALITY), None)
     n_actions = sum(1 for n in g.nodes.values() if n.role is Role.ACTION)
@@ -958,6 +985,103 @@ def _read_items_from_content(content: str, fmt: str, encoding: str,
 # HTTP plumbing
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# PlusCal formalisation + AI assistant
+# ---------------------------------------------------------------------------
+
+def _tla_status_public() -> dict:
+    """TLA+ tool availability for the page (paths are not exposed)."""
+    from .pluscal import tla_tools_status
+    st = tla_tools_status()
+    return {"available": st["available"], "detail": st["detail"]}
+
+
+def _llm_defaults() -> dict:
+    """Environment defaults for the AI settings form -- configuration only,
+    never credentials."""
+    from .llm import OllamaProvider, VertexAIProvider
+    env = os.environ
+    return {
+        "provider": (env.get("RAVEN_LLM_PROVIDER") or "none").lower(),
+        "ollama": {"host": env.get("OLLAMA_HOST") or "http://localhost:11434",
+                   "model": env.get("RAVEN_OLLAMA_MODEL") or OllamaProvider.DEFAULT_MODEL},
+        "vertex": {"project": env.get("GOOGLE_CLOUD_PROJECT") or env.get("GCLOUD_PROJECT") or "",
+                   "location": env.get("GOOGLE_CLOUD_LOCATION") or "us-central1",
+                   "model": env.get("RAVEN_VERTEX_MODEL") or VertexAIProvider.DEFAULT_MODEL,
+                   "endpoint": env.get("RAVEN_VERTEX_ENDPOINT") or ""},
+    }
+
+
+def _parse_for(state: GuiState, payload: dict):
+    text = (payload.get("text") or "").strip()
+    if not text:
+        raise ReqGraphError("enter a requirement first")
+    template = TEMPLATES.get(payload.get("template", ""), RUPP_TEMPLATE)
+    extractor = state.extractor(payload.get("backend", "rules"))
+    return RequirementParser(template, extractor).parse(text), template, extractor
+
+
+def pluscal_request(state: GuiState, payload: dict) -> dict:
+    """Formalise one requirement as PlusCal (+ optional TLC validation)."""
+    from .pluscal import requirement_to_pluscal, validate_spec
+    g, _, _ = _parse_for(state, payload)
+    spec = requirement_to_pluscal(g, req_id=(payload.get("id") or "").strip() or None)
+    out = spec.to_dict()
+    out["validation"] = validate_spec(spec) if payload.get("validate") else None
+    return out
+
+
+def pluscal_validate_request(state: GuiState, payload: dict) -> dict:
+    """Validate an edited (or AI-refined) module with the PlusCal translator + TLC."""
+    from .pluscal import validate_spec
+    tla, cfg = payload.get("tla") or "", payload.get("cfg") or ""
+    if not tla.strip() or not cfg.strip():
+        raise ReqGraphError("both the module and its TLC config are required")
+    return validate_spec(tla, cfg=cfg)
+
+
+def _require_provider(state: GuiState, payload: dict):
+    prov = state.llm_provider(payload.get("llm"))
+    if prov is None:
+        raise ReqGraphError(
+            "the AI assistant is off -- choose Ollama (local) or Google Cloud "
+            "Vertex AI in the AI assistant settings")
+    return prov
+
+
+def llm_status_request(state: GuiState, payload: dict) -> dict:
+    """Health of the configured provider (no billable call is made)."""
+    cfg = payload.get("llm")
+    if not cfg or not cfg.get("provider"):
+        from .llm import all_status
+        return all_status()
+    prov = state.llm_provider(cfg)
+    if prov is None:
+        return {"provider": "none", "available": False, "detail": "AI assistant is off"}
+    return prov.status()
+
+
+def llm_rewrite_request(state: GuiState, payload: dict) -> dict:
+    """AI rewrite suggestion, re-scored by RAVEN's own checks."""
+    from .assist import suggest_rewrite
+    prov = _require_provider(state, payload)
+    _, template, extractor = _parse_for(state, payload)
+    return suggest_rewrite(payload["text"].strip(), prov,
+                           template=template, extractor=extractor)
+
+
+def llm_pluscal_request(state: GuiState, payload: dict) -> dict:
+    """AI refinement of the generated PlusCal, guarded and re-validated."""
+    from .assist import refine_pluscal
+    from .pluscal import requirement_to_pluscal
+    prov = _require_provider(state, payload)
+    g, _, _ = _parse_for(state, payload)
+    spec = requirement_to_pluscal(g, req_id=(payload.get("id") or "").strip() or None)
+    out = refine_pluscal(spec, prov, validate=payload.get("validate", True))
+    out["baseline"] = spec.to_dict()
+    return out
+
+
 class _Handler(BaseHTTPRequestHandler):
     state: GuiState = None  # injected by launch()
 
@@ -997,19 +1121,61 @@ class _Handler(BaseHTTPRequestHandler):
                              "template_info": {n: template_info(n)
                                                for n in sorted(TEMPLATES)},
                              "embedding_available": self.state.embedding_available(),
+                             "tla_tools": _tla_status_public(),
+                             "llm_default": _llm_defaults(),
                              "version": __version__})
         else:
             self.send_error(404)
 
+    def _request_is_same_origin(self) -> Optional[str]:
+        """Reject cross-site requests; returns a reason, or None when allowed.
+
+        The server is local-only, but a web page the user visits could still
+        POST to it. Requiring a JSON body forces the browser to send a CORS
+        preflight, which this server never approves; checking Origin and Host
+        also defeats DNS-rebinding. This matters most for the AI endpoints,
+        which act with the user's Google Cloud credentials.
+        """
+        ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        if ctype != "application/json":
+            return "requests must be sent as application/json"
+        port = self.server.server_address[1]
+        allowed = {f"127.0.0.1:{port}", f"localhost:{port}", f"[::1]:{port}"}
+        host = (self.headers.get("Host") or "").lower()
+        if host not in allowed:
+            return "unexpected Host header"
+        origin = self.headers.get("Origin")
+        if origin and origin.lower().split("://", 1)[-1] not in allowed:
+            return "cross-origin requests are not allowed"
+        return None
+
+    _POST_ROUTES = ("/api/parse", "/api/connections", "/api/export",
+                    "/api/compare", "/api/compare-v1", "/api/pluscal",
+                    "/api/pluscal/validate", "/api/llm/status",
+                    "/api/llm/rewrite", "/api/llm/pluscal")
+
     def do_POST(self):
-        if self.path not in ("/api/parse", "/api/connections",
-                             "/api/export", "/api/compare", "/api/compare-v1"):
+        if self.path not in self._POST_ROUTES:
             self.send_error(404)
+            return
+        refusal = self._request_is_same_origin()
+        if refusal:
+            self._send_json({"error": refusal}, status=403)
             return
         try:
             length = int(self.headers.get("Content-Length", 0))
             payload = json.loads(self.rfile.read(length) or b"{}")
-            if self.path == "/api/parse":
+            if self.path == "/api/pluscal":
+                self._send_json(pluscal_request(self.state, payload))
+            elif self.path == "/api/pluscal/validate":
+                self._send_json(pluscal_validate_request(self.state, payload))
+            elif self.path == "/api/llm/status":
+                self._send_json(llm_status_request(self.state, payload))
+            elif self.path == "/api/llm/rewrite":
+                self._send_json(llm_rewrite_request(self.state, payload))
+            elif self.path == "/api/llm/pluscal":
+                self._send_json(llm_pluscal_request(self.state, payload))
+            elif self.path == "/api/parse":
                 self._send_json(parse_request(self.state, payload))
             elif self.path == "/api/connections":
                 self._send_json(connections_request(self.state, payload))
