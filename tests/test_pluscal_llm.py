@@ -479,3 +479,35 @@ def test_gui_pluscal_and_ai_endpoints(gui):
     assert "available" in info["tla_tools"]
     assert info["llm_default"]["ollama"]["model"]
     assert "token" not in json.dumps(info["llm_default"]).lower()     # never secrets
+
+
+# --- CLI behaviours documented in the top-level README ----------------------
+
+def test_cli_export_creates_missing_output_folders(tmp_path):
+    """README example `export … --out-prefix build/out` must work on a fresh
+    checkout (it used to crash with 'Cannot save file into a non-existent
+    directory')."""
+    pytest.importorskip("pandas")
+    from reqgraph.__main__ import main
+    src = tmp_path / "reqs.csv"
+    src.write_text("id,text\nR1,The pump shall start within 4 seconds.\n", encoding="utf-8")
+    prefix = tmp_path / "build" / "nested" / "out"
+    assert main(["export", str(src), "--out-prefix", str(prefix)]) == 0
+    for ext in (".csv", ".json", ".graphml", ".req.ttl"):
+        assert (tmp_path / "build" / "nested" / f"out{ext}").exists(), ext
+
+
+def test_cli_ai_commands_fail_once_when_provider_not_ready(tmp_path, capsys):
+    """An unreachable provider stops with one actionable error and exit code != 0,
+    instead of repeating the same failure for every requirement."""
+    from reqgraph.__main__ import main
+    src = tmp_path / "reqs.txt"
+    src.write_text("The system shall respond quickly.\nThe pump shall start.\n",
+                   encoding="utf-8")
+    with pytest.raises(SystemExit) as exc:
+        main(["rewrite", str(src), "--provider", "ollama", "--host", "127.0.0.1:1"])
+    assert "ollama is not ready" in str(exc.value) and "ollama serve" in str(exc.value)
+    with pytest.raises(SystemExit) as exc:
+        main(["pluscal", str(src), "--out", str(tmp_path / "specs"), "--refine",
+              "--provider", "ollama", "--host", "127.0.0.1:1"])
+    assert "ollama is not ready" in str(exc.value)

@@ -1,5 +1,10 @@
-# ── Core (no runtime dependencies) ──────────────────────────────────────────
-# The reqgraph core uses only the Python standard library.
+# Prefer the extras in pyproject.toml, e.g.  pip install -e ".[io,ml,nlp]"
+# (see README.md, section 1). This file installs everything at once.
+
+# ── Core ─────────────────────────────────────────────────────────────────────
+# Parsing, quality, PlusCal generation and the Ollama / Vertex AI connections
+# use the standard library; rdflib reads SysML v1 Turtle/RDF models.
+rdflib>=6.0
 
 # ── NLP backend (spaCy rule-based extraction) ────────────────────────────────
 spacy>=3.5
@@ -16,6 +21,11 @@ lxml
 
 # ── Graph export (networkx integration) ──────────────────────────────────────
 networkx
+
+# ── Google Cloud Vertex AI with a service-account key (optional) ─────────────
+# Not needed when using `gcloud auth application-default login`.
+# google-auth>=2.20
+# requests
 
 # ── Development / testing ────────────────────────────────────────────────────
 pytest

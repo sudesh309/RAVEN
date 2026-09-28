@@ -416,6 +416,10 @@ def cmd_export(args):
     json_path  = args.json    or (f"{prefix}.json"    if prefix else None)
     gml_path   = args.graphml or (f"{prefix}.graphml" if prefix else None)
     rttl_path  = args.req_turtle or (f"{prefix}.req.ttl" if prefix else None)
+    # "--out-prefix build/out" must work on a fresh checkout: create the folders
+    for path in (csv_path, json_path, gml_path, rttl_path):
+        if path and os.path.dirname(path):
+            os.makedirs(os.path.dirname(path), exist_ok=True)
 
     if not any([csv_path, json_path, gml_path, rttl_path]):
         sys.exit("error: specify --out-prefix or at least one of "
@@ -681,7 +685,13 @@ def _add_llm_args(sp):
     g.add_argument("--endpoint", help="Vertex AI base URL override (PSC / sovereign cloud)")
 
 
-def _provider_from_args(args, required=True):
+def _provider_from_args(args, required=True, check=False):
+    """Build the AI provider from CLI flags / environment.
+
+    ``check=True`` verifies it is usable first (Ollama reachable with the model
+    pulled; Vertex credentials and project present -- no billable call), so a
+    set of N requirements fails once with the fix, not N times.
+    """
     from .llm import get_provider
     prov = get_provider(args.provider, model=args.llm_model, host=args.host,
                         project=args.project, location=args.location,
@@ -689,6 +699,10 @@ def _provider_from_args(args, required=True):
     if prov is None and required:
         sys.exit("error: no AI provider -- pass --provider ollama|vertex or set "
                  "RAVEN_LLM_PROVIDER")
+    if prov is not None and check:
+        st = prov.status()
+        if not st.get("available"):
+            sys.exit(f"error: {prov.name} is not ready: {st.get('detail')}")
     return prov
 
 
@@ -703,7 +717,7 @@ def cmd_pluscal(args):
     from .pluscal import requirement_to_pluscal, validate_spec
     items = _items_from_arg(args.requirement)
     parser = _build_parser(args.template, args.backend, args.model)
-    prov = _provider_from_args(args, required=False) if args.refine else None
+    prov = _provider_from_args(args, required=False, check=True) if args.refine else None
     if args.refine and prov is None:
         sys.exit("error: --refine needs an AI provider (--provider ollama|vertex)")
     single = len(items) == 1 and not args.out
@@ -776,7 +790,7 @@ def cmd_llm_status(args):
 
 def cmd_rewrite(args):
     from .assist import suggest_rewrite
-    prov = _provider_from_args(args)
+    prov = _provider_from_args(args, check=True)
     items = _items_from_arg(args.requirement)
     template = TEMPLATES.get(args.template, RUPP_TEMPLATE)
     for i, (rid, text, *_) in enumerate(items, 1):
