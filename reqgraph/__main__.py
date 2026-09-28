@@ -45,7 +45,8 @@ def _build_parser(template_name, backend, model):
 def _read_items(path):
     from .errors import DataFormatError
     from .io_formats import (read_reqif, read_requirements_csv,
-                             read_requirements_excel, read_requirements_json)
+                             read_requirements_docx, read_requirements_excel,
+                             read_requirements_json)
     if not os.path.isfile(path):
         sys.exit(f"error: input file not found: {path}")
     ext = os.path.splitext(path)[1].lower()
@@ -60,10 +61,11 @@ def _read_items(path):
     readers = {".csv": read_requirements_csv, ".json": read_requirements_json,
                ".xlsx": read_requirements_excel, ".xls": read_requirements_excel,
                ".reqif": read_reqif, ".xml": read_reqif,
+               ".docx": read_requirements_docx,
                ".txt": _read_plain_text}
     if ext not in readers:
         sys.exit(f"error: unsupported input extension {ext!r}; use one of "
-                 f".csv .xlsx .xls .json .reqif .xml .txt")
+                 f".csv .xlsx .xls .json .reqif .xml .docx .txt")
     try:
         return readers[ext](path)
     except DataFormatError as exc:
@@ -329,10 +331,15 @@ def cmd_analyze(args):
     p = RequirementParser(RUPP_TEMPLATE)
     print("== quality / completeness / type / EARS ==")
     n_blocked = n_gaps = 0
+    types_seen, ears_seen = {}, {}
     for (rid, text, *_) in items:
         g = enrich(p.parse(text))
         q = g.analysis["quality"]
         c = g.analysis["completeness"]
+        rtype = g.analysis["type"]
+        pattern = (g.analysis["ears_pattern"] or "unknown").split(" ")[0]
+        types_seen[rtype] = types_seen.get(rtype, 0) + 1
+        ears_seen[pattern] = ears_seen.get(pattern, 0) + 1
         smells = [k for k, v in q.items() if v and k != "weak_words"]
         if q["weak_words"]:
             smells.append("weak_words=" + ",".join(q["weak_words"]))
@@ -350,6 +357,28 @@ def cmd_analyze(args):
     ready = len(items) - n_blocked - n_gaps
     print(f"\n-- completeness: {ready}/{len(items)} ready for design, "
           f"{n_gaps} with gaps, {n_blocked} blocked --")
+
+    # requirement-type / EARS mix -- an all-functional set is usually
+    # under-specified rather than genuinely simple
+    print("\n== type & pattern mix ==")
+    for label, counts in (("type", types_seen), ("EARS", ears_seen)):
+        total = sum(counts.values()) or 1
+        mix = ", ".join(f"{k} {v} ({100*v//total}%)"
+                        for k, v in sorted(counts.items(), key=lambda kv: -kv[1]))
+        print(f"{label:5s}: {mix}")
+
+    # traceability health from the document's own link metadata
+    from .traceability import check_set_traceability
+    tr = check_set_traceability(items)
+    print("\n== traceability ==")
+    print(f"identifiers: {tr['n_with_id']}/{tr['n_requirements']} "
+          f"({tr['pct_identified']}%) · links declared: {tr['n_links']} "
+          f"(resolved {tr['n_resolved']}, dangling {tr['n_dangling']}) · "
+          f"verification planned: {tr['n_verification_planned']}")
+    for f in tr["findings"]:
+        print(f"  [{f['severity']}] {f['label']} — {f['hint']}")
+    if not tr["findings"]:
+        print("  no traceability findings")
 
     # embedding-based duplicates / conflicts (optional)
     try:
@@ -387,6 +416,10 @@ def cmd_export(args):
     json_path  = args.json    or (f"{prefix}.json"    if prefix else None)
     gml_path   = args.graphml or (f"{prefix}.graphml" if prefix else None)
     rttl_path  = args.req_turtle or (f"{prefix}.req.ttl" if prefix else None)
+    # "--out-prefix build/out" must work on a fresh checkout: create the folders
+    for path in (csv_path, json_path, gml_path, rttl_path):
+        if path and os.path.dirname(path):
+            os.makedirs(os.path.dirname(path), exist_ok=True)
 
     if not any([csv_path, json_path, gml_path, rttl_path]):
         sys.exit("error: specify --out-prefix or at least one of "
@@ -637,6 +670,152 @@ def cmd_compare_v1(args):
 
 # --- argument parser -------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# PlusCal / AI assistant
+# ---------------------------------------------------------------------------
+
+def _add_llm_args(sp):
+    g = sp.add_argument_group("AI assistant (optional)")
+    g.add_argument("--provider", choices=["ollama", "vertex"],
+                   help="LLM back end (default: $RAVEN_LLM_PROVIDER)")
+    g.add_argument("--llm-model", help="model name (e.g. llama3.1, gemini-2.5-flash)")
+    g.add_argument("--host", help="Ollama host (default $OLLAMA_HOST or localhost:11434)")
+    g.add_argument("--project", help="GCP project (default $GOOGLE_CLOUD_PROJECT)")
+    g.add_argument("--location", help="Vertex AI region or 'global' (default us-central1)")
+    g.add_argument("--endpoint", help="Vertex AI base URL override (PSC / sovereign cloud)")
+
+
+def _provider_from_args(args, required=True, check=False):
+    """Build the AI provider from CLI flags / environment.
+
+    ``check=True`` verifies it is usable first (Ollama reachable with the model
+    pulled; Vertex credentials and project present -- no billable call), so a
+    set of N requirements fails once with the fix, not N times.
+    """
+    from .llm import get_provider
+    prov = get_provider(args.provider, model=args.llm_model, host=args.host,
+                        project=args.project, location=args.location,
+                        endpoint=args.endpoint)
+    if prov is None and required:
+        sys.exit("error: no AI provider -- pass --provider ollama|vertex or set "
+                 "RAVEN_LLM_PROVIDER")
+    if prov is not None and check:
+        st = prov.status()
+        if not st.get("available"):
+            sys.exit(f"error: {prov.name} is not ready: {st.get('detail')}")
+    return prov
+
+
+def _items_from_arg(value):
+    """A file path yields its requirements; anything else is one requirement."""
+    if os.path.isfile(value):
+        return _read_items(value)
+    return [(None, value, {})]
+
+
+def cmd_pluscal(args):
+    from .pluscal import requirement_to_pluscal, validate_spec
+    items = _items_from_arg(args.requirement)
+    parser = _build_parser(args.template, args.backend, args.model)
+    prov = _provider_from_args(args, required=False, check=True) if args.refine else None
+    if args.refine and prov is None:
+        sys.exit("error: --refine needs an AI provider (--provider ollama|vertex)")
+    single = len(items) == 1 and not args.out
+    failures = 0
+    for i, (rid, text, *_) in enumerate(items, 1):
+        rid = args.id if (args.id and len(items) == 1) else (rid or f"R{i}")
+        try:
+            spec = requirement_to_pluscal(parser.parse(text), req_id=rid)
+        except ReqGraphError as exc:
+            failures += 1
+            print(f"[{rid}] cannot formalise: {exc}", file=sys.stderr)
+            continue
+        tla, cfg = spec.tla, spec.cfg
+        if prov is not None:
+            from .assist import refine_pluscal
+            r = refine_pluscal(spec, prov, validate=args.validate, jar=args.tla2tools)
+            verdict = "accepted" if r["accepted"] else "rejected"
+            print(f"[{rid}] AI refinement {verdict}"
+                  + (": " + "; ".join(r["reasons"]) if r["reasons"] else ""),
+                  file=sys.stderr)
+            if r["accepted"]:
+                tla, cfg = r["tla"], r["cfg"]
+        if single:
+            print(tla)
+            print(cfg)
+        else:
+            os.makedirs(args.out or "pluscal_out", exist_ok=True)
+            base = os.path.join(args.out or "pluscal_out", spec.module)
+            with open(base + ".tla", "w", encoding="utf-8") as fh:
+                fh.write(tla)
+            with open(base + ".cfg", "w", encoding="utf-8") as fh:
+                fh.write(cfg)
+            print(f"[{rid}] {spec.pattern}/{spec.obligation} -> {base}.tla, {base}.cfg")
+        for n in spec.notes:
+            print(f"      note: {n}", file=sys.stderr)
+        if args.validate:
+            v = validate_spec(tla, args.tla2tools, cfg=cfg)
+            if not v["available"]:
+                print(f"      TLC: not available ({v['error']})", file=sys.stderr)
+            elif v["ok"]:
+                print(f"      TLC: ok ({v['distinct_states']} distinct states)", file=sys.stderr)
+            else:
+                failures += 1
+                what = ", ".join(f"{x['kind']} {x['name']}" for x in v["violations"])
+                print(f"      TLC: FAILED ({what or v['error']})", file=sys.stderr)
+    return 1 if failures else 0
+
+
+def cmd_llm_status(args):
+    import json as _json
+    from .llm import all_status
+    from .pluscal import tla_tools_status
+    if args.provider:
+        st = {args.provider: _provider_from_args(args).status()}
+    else:
+        st = all_status()
+    st["tla_tools"] = tla_tools_status()
+    if args.json:
+        print(_json.dumps(st, indent=2))
+        return 0
+    if "configured" in st:
+        print(f"configured provider: {st['configured']}")
+    for key in ("ollama", "vertex", "tla_tools"):
+        if key in st:
+            s = st[key]
+            mark = "ok " if s.get("available") else "-- "
+            print(f"{mark}{key:10s} {s.get('detail', '')}")
+    return 0
+
+
+def cmd_rewrite(args):
+    from .assist import suggest_rewrite
+    prov = _provider_from_args(args, check=True)
+    items = _items_from_arg(args.requirement)
+    template = TEMPLATES.get(args.template, RUPP_TEMPLATE)
+    for i, (rid, text, *_) in enumerate(items, 1):
+        rid = rid or f"R{i}"
+        try:
+            r = suggest_rewrite(text, prov, template=template)
+        except ReqGraphError as exc:
+            print(f"[{rid}] error: {exc}", file=sys.stderr)
+            continue
+        o = r["original"]
+        print(f"[{rid}] {r['verdict'].upper()}  (candidate, {r['provider']})")
+        print(f"   before: {text}")
+        for a in r["rewrites"]:
+            print(f"   after : {a['text']}")
+            print(f"           quality {o['quality_score']} -> {a['quality_score']}, "
+                  f"completeness {o['completeness_score']} -> {a['completeness_score']}")
+        if r["resolved"]:
+            print(f"   resolved: {', '.join(r['resolved'])}")
+        if r["introduced"]:
+            print(f"   introduced: {', '.join(r['introduced'])}")
+        for a in r["assumptions"]:
+            print(f"   assumption: {a}")
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="reqgraph",
                                  description="IREB-CPRE requirement <-> graph toolkit")
@@ -815,6 +994,38 @@ def main(argv=None):
     pc.add_argument("--format", default="text",
                     choices=["text", "json", "mermaid", "dot", "cypher", "graphml", "turtle"])
     pc.set_defaults(func=cmd_connections)
+
+    pl = sub.add_parser("pluscal",
+                        help="formalise requirement(s) as PlusCal/TLA+ modules "
+                             "(+ TLC model config)")
+    pl.add_argument("requirement",
+                    help="requirement text, or a file (.csv .xlsx .json .reqif .docx .txt)")
+    pl.add_argument("--id", help="requirement id / module name for a single requirement")
+    pl.add_argument("--out", help="directory for <module>.tla/.cfg (default: print one, "
+                                  "or pluscal_out/ for a file)")
+    pl.add_argument("--validate", action="store_true",
+                    help="translate with pcal.trans and model-check with TLC")
+    pl.add_argument("--tla2tools", help="path to tla2tools.jar (default $RAVEN_TLA2TOOLS)")
+    pl.add_argument("--refine", action="store_true",
+                    help="ask the AI assistant to refine each model (guarded)")
+    pl.add_argument("--template", default="IREB-Rupp")
+    pl.add_argument("--backend", default="rules", choices=["rules", "spacy", "bert"])
+    pl.add_argument("--model", help="BERT tagger directory (backend=bert)")
+    _add_llm_args(pl)
+    pl.set_defaults(func=cmd_pluscal)
+
+    ps = sub.add_parser("llm-status",
+                        help="check the AI assistant back ends and the TLA+ tools")
+    ps.add_argument("--json", action="store_true")
+    _add_llm_args(ps)
+    ps.set_defaults(func=cmd_llm_status)
+
+    pw = sub.add_parser("rewrite",
+                        help="AI rewrite suggestions, re-scored by RAVEN's own checks")
+    pw.add_argument("requirement", help="requirement text, or a file of requirements")
+    pw.add_argument("--template", default="IREB-Rupp")
+    _add_llm_args(pw)
+    pw.set_defaults(func=cmd_rewrite)
 
     args = ap.parse_args(argv)
     level = {0: logging.WARNING, 1: logging.INFO}.get(args.verbose, logging.DEBUG)

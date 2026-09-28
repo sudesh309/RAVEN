@@ -3,7 +3,8 @@
 Convert any textual requirement into a typed semantic **graph** (nodes + edges)
 and regenerate the **exact** original text from the graph. Modular extraction
 backends (rules / spaCy / BERT), IREB/Rupp + EARS + custom templates, quality
-analysis, duplicate/conflict detection, and CSV/Excel/ReqIF batch I/O.
+analysis, completeness & traceability checks, and CSV/Excel/JSON/ReqIF/Word
+batch I/O.
 
 📖 **Full reference (every function, user guide, limitations):**
 [`docs/MANUAL.md`](docs/MANUAL.md)
@@ -43,6 +44,7 @@ Core (always): pure-Python, plus `numpy`/`networkx` for exports.
 | BERT tagger + analyzer | `pip install torch transformers` |
 | CSV / Excel | `pip install pandas openpyxl` |
 | ReqIF | `pip install lxml` |
+| Word (.docx) | none — read with the stdlib (zipfile + ElementTree) |
 | tests | `pip install pytest` |
 
 ## Quick start
@@ -474,7 +476,8 @@ read_reqif("reqs.reqif")
 ```
 
 All readers — `read_requirements_csv`, `read_requirements_excel`,
-`read_requirements_json`, `read_reqif` — return `(id, text, metadata)` triples.
+`read_requirements_json`, `read_reqif`, `read_requirements_docx` — return
+`(id, text, metadata)` triples.
 Any extra columns/attributes (e.g. **rationale**, **applicability**, **additional
 info**) are captured into `metadata` with normalised names (lowercased,
 spaces/hyphens → underscores). A source column whose name collides with a parser
@@ -486,6 +489,60 @@ from reqgraph.io_formats import read_requirements_json
 items = read_requirements_json("reqs.json")   # [{"id","text","rationale",...}] or {"R1": {...}}
 # items -> [("R1", "The system shall ...", {"rationale": "...", "applicability": "..."}), ...]
 ```
+
+### Loading real-world files (predefined formats)
+
+Requirement documents rarely use the literal headers `id` and `text`, so the
+readers match the conventions the source tools emit. Nothing needs renaming
+before import:
+
+| Source | Text column recognised as | ID column recognised as |
+|---|---|---|
+| DOORS / DNG | `Object Text`, `ReqIF.Text` | `Object Identifier`, `ReqIF.ForeignID` |
+| Polarion / Jama | `Description` | `Requirement ID` |
+| Hand-written table | `Requirement`, `Statement` | `Req No`, `Key`, `Reference` |
+| Canonical | `text` | `id` |
+
+**Word (`.docx`)** needs no extra dependency — the OOXML package is read with
+the stdlib. Two predefined layouts are recognised, and a third is a fallback:
+
+```python
+from reqgraph.io_formats import read_requirements_docx
+read_requirements_docx("spec.docx")
+```
+
+1. **Requirements table** — any table whose header names a requirement text
+   column. Extra columns (Rationale, Verification, Parent…) become metadata,
+   exactly like a CSV. Non-requirement tables (revision history, glossary) are
+   skipped automatically.
+2. **ID-prefixed paragraphs** — `REQ-001: The system shall …`, `[SYS-12] …`,
+   or `3.1.2 The system shall …`.
+3. **Prose fallback** — any paragraph containing a modality (shall/must/should),
+   so a narrative specification still imports rather than failing.
+
+**ReqIF** handles the attribute value types real tools emit: `STRING` *and*
+`XHTML` (DOORS and Polarion store the requirement text as XHTML), plus
+`ENUMERATION` (resolved to its label), `DATE`, `INTEGER`, `REAL` and `BOOLEAN`
+— all non-text attributes are preserved as metadata.
+
+### Traceability health of a document (no model required)
+
+`build_traceability_matrix` answers *"is this requirement realised by the
+design?"* and needs a SysML model. Before a model exists, the question is
+whether the **document itself** is traceable:
+
+```python
+from reqgraph import check_set_traceability
+t = check_set_traceability(items)      # (id, text, meta) triples, or a RequirementSetGraph
+t["pct_identified"]   # requirements carrying a usable trace anchor
+t["duplicate_ids"]    # blocker: two requirements sharing an id
+t["n_dangling"]       # parent/derived-from targets not present in the set
+t["findings"]         # severity-ranked, same vocabulary as the completeness check
+```
+
+Link columns are read from the document's own metadata — `parent`,
+`derived_from`, `refines`, `satisfies`, `allocated_to`, `verified_by`,
+`verification`… — and a cell may name several targets (`"SYS-1; SYS-2"`).
 
 ### One-shot export: CSV + JSON + consolidated GraphML
 
@@ -681,6 +738,98 @@ Markdown / GraphML downloads. The card's **Load worked example** button fills
 both panels with a small model + requirement set that exercises all three trace
 states.
 
+## Formal specification: requirement → PlusCal / TLA+
+
+A parsed requirement already says *who* acts, *when*, *how binding* it is, *what*
+happens and *how fast* — everything a formal model needs. `requirement_to_pluscal`
+turns that into a PlusCal module plus a TLC model configuration:
+
+| Requirement element | Becomes |
+|---|---|
+| SUBJECT | a (fair) process that performs the action |
+| CONDITION — WHEN / IF / AS SOON AS | a Boolean raised by an `Environment` process |
+| CONDITION — WHILE / DURING / WHERE | a Boolean with an arbitrary, fixed initial value |
+| PROCESS + OBJECT (incl. AND / OR) | "has happened" flags; OR becomes `either … or` |
+| MODALITY `shall` / `must` | checked properties: `Response == Trigger ~> Done` |
+| MODALITY `should` | the same properties, reported as advisory |
+| MODALITY `may` | no obligation, so nothing to check beyond typing |
+| MODALITY `shall not` | `Never == ~Done`, or an action property forbidding the step while the condition holds |
+| CONSTRAINT "within N units" | a discrete clock timed from the trigger + `DeadlineMet` invariant |
+
+```python
+from reqgraph import requirement_to_pluscal, validate_spec
+
+spec = requirement_to_pluscal(
+    "When the cabin altitude exceeds 14,000 feet, the oxygen system shall deploy "
+    "the passenger oxygen masks within 4 seconds.", req_id="REQ-002")
+spec.write("specs/")          # specs/REQ_002.tla + specs/REQ_002.cfg
+spec.mapping                  # requirement element -> model identifier (traceability)
+spec.notes                    # anything that could not be formalised, stated explicitly
+validate_spec(spec)           # pcal.trans + TLC (needs Java + tla2tools.jar)
+```
+
+The output is a **reference model**: TLC confirms the requirement is consistent and
+satisfiable as formalised. The value is in the *properties* — replace the reference
+process with a design and TLC checks the design against them. The test suite
+mutation-tests every property: a design that responds too slowly violates
+`DeadlineMet`, one that never responds violates `Response`, one that acts during a
+prohibited state violates `Prohibition`.
+
+What it does **not** do: rates, accuracies and ranges ("at 10 Hz", "within 2 m")
+are listed in `notes` as not formalised rather than guessed; a statement without a
+modality is refused (its obligation is undefined); state conditions are fixed for
+a run. Model-checking needs Java and `tla2tools.jar` — download it from the
+[TLA+ releases](https://github.com/tlaplus/tlaplus/releases) and set
+`RAVEN_TLA2TOOLS=/path/to/tla2tools.jar`. Generation needs neither.
+
+## AI assistant — local Ollama or Google Cloud Vertex AI (optional)
+
+Two back ends, both over plain HTTP with the standard library:
+
+| | Ollama (local) | Google Cloud Vertex AI |
+|---|---|---|
+| Data leaves the machine | no | yes — use only for data you are cleared to send |
+| Setup | `ollama serve` + `ollama pull llama3.1` | `gcloud auth application-default login` |
+| Config | `OLLAMA_HOST`, `RAVEN_OLLAMA_MODEL` | `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `RAVEN_VERTEX_MODEL` |
+| Extra packages | none | none (`pip install reqgraph[gcp]` adds google-auth for service accounts) |
+
+Credentials are resolved on the machine running RAVEN — `GOOGLE_OAUTH_ACCESS_TOKEN`,
+then Application Default Credentials, then the `gcloud` CLI — and never pass
+through the browser. `RAVEN_VERTEX_ENDPOINT` overrides the base URL for Private
+Service Connect, a sovereign-cloud host or an internal gateway. A local Ollama is
+reached directly even when a corporate `HTTP(S)_PROXY` is set.
+
+```python
+from reqgraph import get_provider, suggest_rewrite, refine_pluscal, requirement_to_pluscal
+
+llm = get_provider("ollama", model="llama3.1")          # or get_provider("vertex", project="my-proj")
+llm.status()                                            # health check, no billable call
+
+r = suggest_rewrite("The system shall respond quickly.", llm)
+r["verdict"]      # improved | needs_input | unchanged | regressed
+r["rewrites"]     # each re-scored by RAVEN's own quality + completeness checks
+
+spec = requirement_to_pluscal("If the airspeed drops below the stall speed, then the "
+                              "stall warning system shall activate the stick shaker.")
+out = refine_pluscal(spec, llm)                         # validated by TLC when available
+out["accepted"], out["reasons"]
+```
+
+**The model is never the authority.** Everything is a *candidate*:
+
+* A **rewrite** is re-scored by RAVEN's deterministic checks and given a verdict.
+  The model is told never to invent numbers; where it needs one it writes
+  `<value>`, which is reported as `needs_input`, not as a regression. RAVEN cannot
+  confirm the meaning was preserved — that remains a human review.
+* A **refined PlusCal model** is rejected if it drops a property the requirement
+  produced, or changes the definition of one *or of a helper it depends on*
+  (`Done == TRUE` would make `Response` vacuous while leaving it untouched). Only
+  `TypeOK` may grow. TLC then re-checks the candidate. A model that makes TLC pass
+  by checking less is exactly what these guards exist to catch.
+
+The GUI server also refuses cross-site requests (non-JSON bodies, foreign `Origin`
+or `Host`), because the AI endpoints act with the user's cloud credentials.
+
 ## GUI
 
 ```bash
@@ -707,7 +856,7 @@ The page also includes:
   (one per line) and see the SUBJECT/OBJECT entities rendered in an interactive
   **force-directed graph** (see below), with the same knowledge-graph export
   buttons.
-* an **"Import & analyze"** panel: upload a CSV / Excel / JSON / ReqIF file (or
+* an **"Import & analyze"** panel: upload a CSV / Excel / JSON / ReqIF / Word file (or
   paste raw text), and get the per-requirement quality table (auto-discovering
   any extra metadata columns), the same force-directed entity graph, and
   one-click downloads of the CSV, JSON, and consolidated element-level GraphML.
@@ -819,6 +968,16 @@ python -m reqgraph export reqs.csv --out-prefix build/out --req-turtle reqs.ttl
 # compare a SysML model against requirements (v2 text, or v1 XMI/Turtle)
 python -m reqgraph compare    model.sysml reqs.csv
 python -m reqgraph compare-v1 model.xmi   reqs.csv --kg model_kg.graphml
+
+# formalise as PlusCal/TLA+ (one requirement -> stdout, a file -> one module each)
+python -m reqgraph pluscal "When the door opens, the lamp shall switch on within 2 seconds." --id REQ-7 --validate
+python -m reqgraph pluscal spec.docx --out specs/ --validate --tla2tools ~/tla2tools.jar
+
+# AI assistant: check back ends, suggest rewrites, refine PlusCal
+python -m reqgraph llm-status
+python -m reqgraph rewrite reqs.csv --provider ollama --llm-model llama3.1
+python -m reqgraph rewrite "The system shall respond quickly." --provider vertex --project my-proj --location europe-west9
+python -m reqgraph pluscal reqs.csv --out specs/ --refine --provider ollama --validate
 ```
 
 A ready-to-use tagger trained on the 30-requirement seed corpus
@@ -834,8 +993,8 @@ reqgraph/
   parser.py      RequirementParser + build_requirement
   extractors.py  Extractor ABC + Rule / spaCy / BERT backends + registry
   nlp.py         BertTokenTagger (trainable) + RequirementAnalyzer
-  quality.py     IREB quality smells + type + EARS classification
-  io_formats.py  CSV / Excel / ReqIF
+  quality.py     IREB quality smells + completeness + type + EARS classification
+  io_formats.py  CSV / Excel / JSON / ReqIF / Word (.docx)
   corpus.py      requirement-set SUBJECT/OBJECT cross-referencing + connections graph
                  + to_req_turtle() requirements ontology export
   sysml_parser.py    SysML v2 textual-notation parser
@@ -843,7 +1002,11 @@ reqgraph/
   sysml_v1_parser.py   SysML v1 XMI + Turtle/RDF parser → knowledge graph
   sysml_v1_compare.py  context-aware SysML v1 comparison + ontology diff (compare-v1)
   traceability.py    Requirements Verification & Traceability Matrix (RVTM) —
-                     verified/candidate/gap traces, IADT verification method, findings
+                     verified/candidate/gap traces, IADT verification method, findings,
+                     + document-level trace health (check_set_traceability)
+  pluscal.py         requirement -> PlusCal/TLA+ module + TLC config; optional TLC run
+  llm.py             LLM providers: local Ollama, Google Cloud Vertex AI (stdlib HTTP)
+  assist.py          guarded AI features: re-scored rewrites, PlusCal refinement
 tests/           pytest suite (lossless round-trip is the headline invariant)
 ```
 

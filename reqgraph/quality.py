@@ -244,6 +244,26 @@ def check_completeness(graph_or_text, req_type: str | None = None) -> dict:
     return out
 
 
+_SMELL_LABELS = (("missing_modality", "missing modality"),
+                 ("passive_voice", "passive voice"),
+                 ("vague_quantifier", "vague quantifier"),
+                 ("non_atomic", "non-atomic"),
+                 ("compound_requirement", "compound requirement"))
+
+
+def quality_score(q: dict) -> tuple[int, list]:
+    """(0-100 score, human-readable smells) for a :func:`check_quality` result.
+
+    Each structural smell costs 20 points and each weak word 10 -- the single
+    definition shared by the GUI, the CLI and the LLM rewrite re-scoring, so a
+    suggested rewrite is judged by exactly the yardstick the user sees.
+    """
+    smells = [label for key, label in _SMELL_LABELS if q.get(key)]
+    weak = list(q.get("weak_words", []))
+    score = max(0, 100 - 20 * len(smells) - 10 * len(weak))
+    return score, smells + [f"weak word: {w}" for w in weak]
+
+
 def classify_type(graph_or_text) -> str:
     text = graph_or_text if isinstance(graph_or_text, str) else graph_or_text.generate()
     low = text.lower()

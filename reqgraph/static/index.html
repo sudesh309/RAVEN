@@ -308,6 +308,32 @@
   .find-high{background:var(--bad-soft);color:var(--bad)}
   .find-medium{background:#FBF3E2;color:#7A5A12}
   .find-low{background:var(--accent-soft);color:var(--accent)}
+  /* PlusCal + AI assistant */
+  .ctl input[type=text]{font:inherit;border-radius:8px;border:1px solid var(--border);
+    background:#fff;padding:7px 10px;color:var(--text);min-width:120px}
+  .ctl input[type=text]:focus{outline:2px solid var(--accent-soft);border-color:var(--accent)}
+  .codebox{background:#f7f6fb;border:1px solid var(--border);border-radius:10px;
+    padding:12px 14px;font:12.5px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    overflow:auto;max-height:440px;white-space:pre;margin:0;color:#2c2a3a}
+  .errbox{display:none;background:var(--bad-soft);color:var(--bad);border:1px solid #f0c0c0;
+    border-radius:8px;padding:9px 13px;font-size:13.5px;margin-top:10px}
+  .errbox.show{display:block}
+  .okbox{background:#E8F6EF;color:#0a5c42;border:1px solid #bfe5d2;border-radius:8px;
+    padding:9px 13px;font-size:13.5px;margin-top:10px}
+  .infobox{background:var(--accent-soft);color:var(--text);border:1px solid #d9d6f5;
+    border-radius:8px;padding:9px 13px;font-size:13px;margin-top:10px}
+  .chip{display:inline-block;font-size:11.5px;padding:2px 10px;border-radius:99px;
+    background:var(--accent-soft);border:1px solid #d9d6f5;color:var(--accent);margin:0 6px 6px 0}
+  .verdict{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;
+    padding:3px 10px;border-radius:99px}
+  .verdict.improved{background:#E1F5EE;color:#0a5c42}
+  .verdict.needs_input{background:#FBF3E2;color:#8a5a0a}
+  .verdict.unchanged{background:var(--bg);color:var(--muted)}
+  .verdict.regressed{background:#FBECEC;color:var(--bad)}
+  .ai-sub{font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;
+    color:var(--muted);margin:14px 0 6px}
+  .ai-card{border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-top:12px}
+  button:disabled{opacity:.5;cursor:not-allowed}
 </style>
 </head>
 <body>
@@ -326,6 +352,8 @@
   <a href="#tool-import"><b>3</b>Import &amp; analyze</a>
   <a href="#tool-compare2"><b>4</b>Compare SysML v2</a>
   <a href="#tool-compare1"><b>5</b>Compare SysML v1 · RVTM</a>
+  <a href="#tool-pluscal"><b>6</b>PlusCal / TLA+</a>
+  <a href="#tool-ai">&#9881; AI assistant</a>
 </nav>
 <main>
   <section class="card" id="process">
@@ -440,8 +468,11 @@
       <div class="ctl"><label for="backend">Backend</label>
         <select id="backend" title="extraction backend"></select></div>
       <button class="primary" id="parse" style="align-self:flex-end">Parse &rarr; graph</button>
+      <button class="ghost" id="ai-rewrite" style="align-self:flex-end"
+        title="Ask the AI assistant for an INCOSE/EARS rewrite; RAVEN re-scores it">&#10024; Suggest rewrite</button>
       <span class="hint">Ctrl+Enter parses</span>
     </div>
+    <div id="ai-rewrite-out"></div>
     <details class="paramhelp">
       <summary>What do the selected backend &amp; template do?</summary>
       <div id="config-info">
@@ -579,11 +610,14 @@
       <button class="tab-btn" id="exp-tab-file" onclick="expTab('file')">&#128193; Upload file</button>
     </div>
     <div id="exp-file-pane" style="display:none">
-      <input type="file" id="exp-file" accept=".csv,.xlsx,.xls,.json,.reqif,.xml"
+      <input type="file" id="exp-file" accept=".csv,.xlsx,.xls,.json,.reqif,.xml,.docx"
              style="font:inherit;cursor:pointer">
       <div class="hint" style="display:block;margin-top:6px">
-        Accepts <b>.csv .xlsx .xls .json .reqif .xml</b>. CSV/Excel need a header
-        row with a <code>text</code> column (and optionally <code>id</code>).
+        Accepts <b>.csv .xlsx .xls .json .reqif .xml .docx</b> (Word). Column names
+        are matched flexibly — <code>text</code>, <code>Requirement</code>,
+        <code>Object Text</code>, <code>Description</code>… all work, as do
+        <code>id</code>, <code>Req ID</code> and <code>Object Identifier</code>.
+        A Word file may hold a requirements table or ID-prefixed paragraphs.
       </div>
     </div>
     <div id="exp-paste-pane">
@@ -654,6 +688,7 @@
     </div>
     <div id="exp-summary" style="margin:6px 0 12px;color:var(--muted);font-size:13px"></div>
     <div id="exp-completeness"></div>
+    <div id="exp-trace"></div>
     <div class="graph-legend" id="exp-graph-legend">
       <span class="ll" style="color:var(--muted)">Bigger node = more links · thicker
         line = stronger match · use the controls to recolour &amp; filter ·
@@ -1042,6 +1077,67 @@
       </div>
     </div>
   </section>
+
+  <!-- ── Requirement → PlusCal / TLA+ ─────────────────────────────────── -->
+  <section class="card" id="tool-pluscal">
+    <h2><span class="step">6</span>Formalise as PlusCal / TLA+</h2>
+    <p class="lead">Turn a requirement into a model-checkable specification: the
+      subject becomes a process, conditions become triggers, the modality decides
+      what TLC must prove, and &ldquo;within N units&rdquo; becomes a deadline.</p>
+    <textarea id="pc-text" spellcheck="false"></textarea>
+    <div class="controls">
+      <div class="ctl"><label for="pc-id">Requirement ID</label>
+        <input type="text" id="pc-id" value="REQ-002" style="width:130px"></div>
+      <div class="ctl"><label for="pc-example">Example</label>
+        <select id="pc-example"></select></div>
+      <button class="primary" id="pc-run" style="align-self:flex-end">Generate PlusCal</button>
+      <button class="ghost" id="pc-validate" style="align-self:flex-end">Model-check with TLC</button>
+      <button class="ghost" id="pc-refine" style="align-self:flex-end">&#10024; Refine with AI</button>
+    </div>
+    <div class="errbox" id="pc-error"></div>
+    <div id="pc-out"></div>
+    <div id="pc-refine-out"></div>
+  </section>
+
+  <!-- ── AI assistant settings ──────────────────────────────────────────── -->
+  <section class="card" id="tool-ai">
+    <h2>&#9881; AI assistant <span style="text-transform:none;font-weight:400">(optional)</span></h2>
+    <p class="lead">Connect a <b>local Ollama</b> model &mdash; nothing leaves this
+      machine &mdash; or <b>Google Cloud Vertex AI</b>. The assistant only ever
+      proposes: rewrites are re-scored by RAVEN&rsquo;s own checks, and refined
+      PlusCal is re-verified by TLC and rejected if it drops or changes a property.</p>
+    <div class="controls">
+      <div class="ctl"><label for="ai-provider">Provider</label>
+        <select id="ai-provider">
+          <option value="none">Off</option>
+          <option value="ollama">Ollama &mdash; local</option>
+          <option value="vertex">Google Cloud &mdash; Vertex AI</option>
+        </select></div>
+      <div class="ctl ai-ollama"><label for="ai-host">Ollama host</label>
+        <input type="text" id="ai-host" placeholder="http://localhost:11434"></div>
+      <div class="ctl ai-ollama"><label for="ai-ollama-model">Model</label>
+        <input type="text" id="ai-ollama-model" placeholder="llama3.1"></div>
+      <div class="ctl ai-vertex"><label for="ai-project">GCP project</label>
+        <input type="text" id="ai-project" placeholder="my-project-id"></div>
+      <div class="ctl ai-vertex"><label for="ai-location">Location</label>
+        <input type="text" id="ai-location" placeholder="us-central1" style="width:130px"></div>
+      <div class="ctl ai-vertex"><label for="ai-vertex-model">Model</label>
+        <input type="text" id="ai-vertex-model" placeholder="gemini-2.5-flash"></div>
+      <button class="ghost" id="ai-test" style="align-self:flex-end">Test connection</button>
+    </div>
+    <details class="paramhelp ai-vertex">
+      <summary>Advanced &mdash; custom endpoint &amp; credentials</summary>
+      <div class="controls">
+        <div class="ctl" style="flex:1"><label for="ai-endpoint">Endpoint override (Private Service Connect, sovereign cloud, gateway)</label>
+          <input type="text" id="ai-endpoint" placeholder="https://… (blank = Google&rsquo;s regional endpoint)" style="width:100%"></div>
+      </div>
+      <p class="hint" style="margin:8px 0 0">Credentials are never entered here. RAVEN
+        uses Application Default Credentials (<code>gcloud auth application-default login</code>),
+        the <code>gcloud</code> CLI, or <code>GOOGLE_OAUTH_ACCESS_TOKEN</code> on the machine
+        running RAVEN.</p>
+    </details>
+    <div id="ai-status"></div>
+  </section>
 </main>
 
 <script>
@@ -1111,6 +1207,303 @@ async function boot(){
   parseExport();
   parseCompare();
   v1LoadExample();
+  aiInit();
+  pcInit();
+}
+
+// ===================================================================
+// shared JSON POST (the server rejects anything that is not JSON)
+// ===================================================================
+async function postJSON(url, body){
+  const r = await fetch(url, {method:"POST",
+    headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)});
+  let d = {};
+  try{ d = await r.json(); }catch(e){ d = {error: `HTTP ${r.status}`}; }
+  if(!r.ok && !d.error) d.error = `HTTP ${r.status}`;
+  return d;
+}
+function download(name, text){
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], {type:"text/plain"}));
+  a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+// ===================================================================
+// AI assistant settings -- remembered per viewer (localStorage), never
+// credentials: those stay on the machine running RAVEN.
+// ===================================================================
+const AI_KEY = "raven.ai.v1";
+function aiConfig(){
+  const p = $("ai-provider").value;
+  if(p === "ollama") return {provider:p, host:$("ai-host").value.trim(),
+                             model:$("ai-ollama-model").value.trim()};
+  if(p === "vertex") return {provider:p, project:$("ai-project").value.trim(),
+                             location:$("ai-location").value.trim(),
+                             model:$("ai-vertex-model").value.trim(),
+                             endpoint:$("ai-endpoint").value.trim()};
+  return {provider:"none"};
+}
+function aiLabel(){
+  const c = aiConfig();
+  return c.provider === "ollama" ? `Ollama (${c.model || "default model"})`
+       : c.provider === "vertex" ? `Vertex AI (${c.model || "default model"})` : "AI off";
+}
+function aiSave(){
+  const all = {provider:$("ai-provider").value, host:$("ai-host").value,
+    ollama_model:$("ai-ollama-model").value, project:$("ai-project").value,
+    location:$("ai-location").value, vertex_model:$("ai-vertex-model").value,
+    endpoint:$("ai-endpoint").value};
+  try{ localStorage.setItem(AI_KEY, JSON.stringify(all)); }catch(e){}
+}
+function aiRefresh(){
+  const p = $("ai-provider").value;
+  document.querySelectorAll(".ai-ollama").forEach(e => e.style.display = p==="ollama" ? "" : "none");
+  document.querySelectorAll(".ai-vertex").forEach(e => e.style.display = p==="vertex" ? "" : "none");
+  const off = p === "none";
+  for(const id of ["ai-rewrite","pc-refine"]){
+    $(id).disabled = off;
+    $(id).title = off ? "Turn on the AI assistant (bottom of the page) to use this"
+                      : `Uses ${aiLabel()}`;
+  }
+  $("ai-status").innerHTML = "";
+}
+function aiInit(){
+  const d = (INFO && INFO.llm_default) || {};
+  let s = {};
+  try{ s = JSON.parse(localStorage.getItem(AI_KEY) || "{}") || {}; }catch(e){ s = {}; }
+  const pick = (a, b) => (a !== undefined && a !== null && a !== "") ? a : (b || "");
+  const prov = pick(s.provider, d.provider);
+  $("ai-provider").value = ["none","ollama","vertex"].includes(prov) ? prov : "none";
+  $("ai-host").value = pick(s.host, d.ollama && d.ollama.host);
+  $("ai-ollama-model").value = pick(s.ollama_model, d.ollama && d.ollama.model);
+  $("ai-project").value = pick(s.project, d.vertex && d.vertex.project);
+  $("ai-location").value = pick(s.location, d.vertex && d.vertex.location);
+  $("ai-vertex-model").value = pick(s.vertex_model, d.vertex && d.vertex.model);
+  $("ai-endpoint").value = pick(s.endpoint, d.vertex && d.vertex.endpoint);
+  for(const id of ["ai-provider","ai-host","ai-ollama-model","ai-project",
+                   "ai-location","ai-vertex-model","ai-endpoint"])
+    $(id).addEventListener("change", () => { aiSave(); aiRefresh(); });
+  $("ai-test").onclick = aiTest;
+  $("ai-rewrite").onclick = aiRewrite;
+  aiRefresh();
+}
+async function aiTest(){
+  const box = $("ai-status");
+  if($("ai-provider").value === "none"){
+    box.innerHTML = `<div class="infobox">The assistant is off. Choose a provider to enable
+      &ldquo;Suggest rewrite&rdquo; and &ldquo;Refine with AI&rdquo;.</div>`; return;
+  }
+  box.innerHTML = `<div class="infobox">Checking ${esc(aiLabel())}&hellip;</div>`;
+  const d = await postJSON("/api/llm/status", {llm: aiConfig()});
+  if(d.error){ box.innerHTML = `<div class="errbox show">${esc(d.error)}</div>`; return; }
+  const extra = d.models && d.models.length ? ` &middot; installed: ${esc(d.models.slice(0,8).join(", "))}` : "";
+  box.innerHTML = d.available
+    ? `<div class="okbox">&#10003; ${esc(d.detail)}${extra}</div>`
+    : `<div class="errbox show">&#10007; ${esc(d.detail)}${extra}</div>`;
+}
+
+// ===================================================================
+// Suggest rewrite (parse card)
+// ===================================================================
+let AI_REWRITES = [];
+async function aiRewrite(){
+  const text = $("text").value.trim();
+  const out = $("ai-rewrite-out");
+  if(!text){ out.innerHTML = `<div class="errbox show">Enter a requirement first.</div>`; return; }
+  const btn = $("ai-rewrite");
+  btn.disabled = true; btn.innerHTML = "&#10024; Thinking&hellip;";
+  out.innerHTML = `<div class="infobox">Asking ${esc(aiLabel())}&hellip; a local model can
+    take a minute on CPU.</div>`;
+  try{
+    const d = await postJSON("/api/llm/rewrite", {text, template:$("template").value,
+                                                  backend:$("backend").value, llm: aiConfig()});
+    if(d.error) throw new Error(d.error);
+    renderRewrite(d);
+  }catch(e){
+    out.innerHTML = `<div class="errbox show">${esc(e.message || e)}</div>`;
+  }finally{
+    btn.disabled = false; btn.innerHTML = "&#10024; Suggest rewrite";
+  }
+}
+const VERDICT_TEXT = {improved:"improved", needs_input:"needs your input",
+                      unchanged:"no change", regressed:"regressed"};
+function scoreArrow(a, b){
+  const tone = b > a ? "var(--ok)" : (b < a ? "var(--bad)" : "var(--muted)");
+  return `${a} &rarr; <b style="color:${tone}">${b}</b>`;
+}
+function renderRewrite(d){
+  AI_REWRITES = d.rewrites.map(r => r.text);
+  const o = d.original;
+  const worstQ = Math.min(...d.rewrites.map(r => r.quality_score));
+  const worstC = Math.min(...d.rewrites.map(r => r.completeness_score));
+  const sentences = d.rewrites.map((r, i) => `
+    <div style="display:flex;gap:10px;align-items:flex-start;margin:6px 0">
+      <div style="flex:1;font-size:14px">${esc(r.text)}
+        ${r.missing.length || r.smells.length ? `<div style="font-size:12px;color:#8a5a0a;margin-top:2px">
+          ${esc([...r.smells, ...r.missing].join(" · "))}</div>` : ""}</div>
+      <button class="ghost" onclick="aiUse(${i})">Use this</button>
+    </div>`).join("");
+  $("ai-rewrite-out").innerHTML = `
+    <div class="ai-card">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <b style="font-size:13.5px">AI suggestion</b>
+        <span class="verdict ${esc(d.verdict)}">${esc(VERDICT_TEXT[d.verdict] || d.verdict)}</span>
+        <span style="font-size:12.5px;color:var(--muted)">quality ${scoreArrow(o.quality_score, worstQ)}
+          &nbsp;&middot;&nbsp; completeness ${scoreArrow(o.completeness_score, worstC)}</span>
+        <span style="margin-left:auto;font-size:11.5px;color:var(--muted)">${esc(d.provider)} &middot; candidate</span>
+      </div>
+      ${sentences}
+      ${d.resolved.length ? `<div style="font-size:12.5px;margin-top:6px"><b>Resolved:</b>
+        ${d.resolved.map(x => `<span class="chip">${esc(x.replace(/_/g," "))}</span>`).join("")}</div>` : ""}
+      ${d.introduced.length ? `<div style="font-size:12.5px"><b>Introduced:</b>
+        ${d.introduced.map(x => `<span class="chip" style="color:var(--bad);border-color:#f0c0c0;background:#FBECEC">${esc(x.replace(/_/g," "))}</span>`).join("")}</div>` : ""}
+      ${d.verdict === "needs_input" ? `<div class="infobox">The rewrite needs a value only you can
+        supply &mdash; replace each <code>&lt;value&gt;</code> before adopting it.</div>` : ""}
+      ${d.rationale ? `<div style="font-size:12.5px;color:var(--muted);margin-top:8px">${esc(d.rationale)}</div>` : ""}
+      ${d.assumptions.length ? `<ul style="font-size:12.5px;color:var(--muted);margin:6px 0 0">
+        ${d.assumptions.map(a => `<li>${esc(a)}</li>`).join("")}</ul>` : ""}
+      <div style="font-size:11.5px;color:var(--muted);margin-top:8px">${esc(d.review_note)}</div>
+    </div>`;
+}
+function aiUse(i){
+  if(AI_REWRITES[i] === undefined) return;
+  $("text").value = AI_REWRITES[i];
+  $("ai-rewrite-out").innerHTML = "";
+  parse();
+}
+
+// ===================================================================
+// PlusCal / TLA+
+// ===================================================================
+const PC_EXAMPLES = [
+  ["REQ-002", "event + deadline", "When the cabin altitude exceeds 14,000 feet, the oxygen system shall deploy the passenger oxygen masks within 4 seconds."],
+  ["REQ-004", "compound AND + deadline", "As soon as an engine fire is detected, the engine control unit shall shut off the affected engine and activate the fire suppression system within 500 milliseconds."],
+  ["REQ-007", "unwanted behaviour (IF)", "If the airspeed drops below the stall speed, then the stall warning system shall activate the stick shaker."],
+  ["REQ-005", "prohibition (shall not)", "The system shall not transmit the message during radio silence."],
+  ["REQ-006", "optional feature (WHERE)", "Where dual redundancy is installed, the system should report the channel status."],
+  ["REQ-001", "ubiquitous", "The flight management system shall calculate the optimal cruise altitude."],
+];
+let PC = null;
+function pcInit(){
+  const sel = $("pc-example");
+  sel.innerHTML = PC_EXAMPLES.map((e, i) => `<option value="${i}">${esc(e[0])} &mdash; ${esc(e[1])}</option>`).join("");
+  sel.onchange = () => { const e = PC_EXAMPLES[+sel.value]; $("pc-id").value = e[0];
+                         $("pc-text").value = e[2]; pcRun(); };
+  $("pc-text").value = PC_EXAMPLES[0][2];
+  $("pc-run").onclick = () => pcRun();
+  $("pc-validate").onclick = pcValidate;
+  $("pc-refine").onclick = pcRefine;
+  const tla = (INFO && INFO.tla_tools) || {available:false, detail:""};
+  $("pc-validate").disabled = !tla.available;
+  $("pc-validate").title = tla.available ? "Translate with pcal.trans and model-check with TLC"
+                                         : "TLA+ tools not found: " + tla.detail;
+  pcRun();
+}
+function pcShowError(msg){
+  const b = $("pc-error"); b.textContent = msg || ""; b.classList.toggle("show", !!msg);
+}
+async function pcRun(){
+  pcShowError(null); $("pc-refine-out").innerHTML = "";
+  const d = await postJSON("/api/pluscal", {text:$("pc-text").value, id:$("pc-id").value,
+                                            template:$("template").value, backend:$("backend").value});
+  if(d.error){ pcShowError(d.error); $("pc-out").innerHTML = ""; PC = null; return; }
+  PC = d; renderPlusCal(d);
+}
+async function pcValidate(){
+  if(!PC) await pcRun();
+  if(!PC) return;
+  const box = $("pc-validation");
+  box.innerHTML = `<div class="infobox">Translating with pcal.trans and model-checking with TLC&hellip;</div>`;
+  const v = await postJSON("/api/pluscal/validate", {tla: PC.tla, cfg: PC.cfg});
+  box.innerHTML = v.error && !("available" in v) ? `<div class="errbox show">${esc(v.error)}</div>` : validationHTML(v);
+}
+function validationHTML(v){
+  if(!v) return "";
+  if(!v.available) return `<div class="infobox">TLC not available: ${esc(v.error)}</div>`;
+  if(v.ok) return `<div class="okbox">&#10003; Translated and model-checked &mdash;
+    ${v.distinct_states} distinct states, every property holds.</div>`;
+  if(v.violations && v.violations.length)
+    return `<div class="errbox show">&#10007; TLC found a violation:
+      ${v.violations.map(x => `<b>${esc(x.kind)} ${esc(x.name)}</b>`).join(", ")}
+      ${v.counterexample ? `<pre class="codebox" style="margin-top:8px;max-height:260px">${esc(v.counterexample)}</pre>` : ""}</div>`;
+  return `<div class="errbox show">&#10007; ${esc(v.error || "TLC did not complete")}
+    ${v.output ? `<pre class="codebox" style="margin-top:8px;max-height:220px">${esc(v.output.slice(-1500))}</pre>` : ""}</div>`;
+}
+function renderPlusCal(d){
+  const kind = {liveness:"liveness", invariant:"invariant", action:"action property", permission:"-"};
+  const props = d.properties.map(p => `<tr><td><code>${esc(p.name)}</code></td>
+      <td>${esc(kind[p.kind] || p.kind)}</td><td>${esc(p.meaning)}</td>
+      <td>${p.checked ? '<span class="qty-ok">&#10003; checked</span>' : '<span style="color:var(--muted)">&mdash;</span>'}</td></tr>`).join("");
+  const map = d.mapping.map(m => `<tr><td>${esc(m.role)}</td><td>${esc(m.text)}</td>
+      <td><code>${esc(m.spec)}</code></td><td style="color:var(--muted)">${esc(m.detail)}</td></tr>`).join("");
+  $("pc-out").innerHTML = `
+    <div style="margin-top:12px">
+      <span class="chip">module ${esc(d.module)}</span>
+      <span class="chip">pattern: ${esc(d.pattern)}</span>
+      <span class="chip">obligation: ${esc(d.obligation)}</span>
+      ${Object.entries(d.constants || {}).map(([k,v]) => `<span class="chip">${esc(k)} = ${esc(v)}</span>`).join("")}
+    </div>
+    <div class="ai-sub">What TLC checks</div>
+    <table style="font-size:12.5px"><thead><tr><th style="width:120px">property</th>
+      <th style="width:110px">kind</th><th>meaning</th><th style="width:90px"></th></tr></thead>
+      <tbody>${props}</tbody></table>
+    <div class="ai-sub">Traceability &mdash; requirement element &rarr; model</div>
+    <table style="font-size:12.5px"><thead><tr><th style="width:130px">element</th>
+      <th>requirement text</th><th>model</th><th>how</th></tr></thead><tbody>${map}</tbody></table>
+    ${d.notes.length ? `<div class="infobox">${d.notes.map(n => `&bull; ${esc(n)}`).join("<br>")}</div>` : ""}
+    <div class="ai-sub" style="display:flex;align-items:center;gap:8px">${esc(d.module)}.tla
+      <button class="ghost" style="margin-left:auto" onclick="download(PC.module+'.tla', PC.tla)">Download .tla</button>
+      <button class="ghost" onclick="download(PC.module+'.cfg', PC.cfg)">Download .cfg</button></div>
+    <pre class="codebox" id="pc-tla">${esc(d.tla)}</pre>
+    <div class="ai-sub">${esc(d.module)}.cfg &mdash; TLC model</div>
+    <pre class="codebox" id="pc-cfg" style="max-height:200px">${esc(d.cfg)}</pre>
+    <div id="pc-validation">${validationHTML(d.validation)}</div>`;
+}
+let PC_CANDIDATE = null;
+async function pcRefine(){
+  const out = $("pc-refine-out");
+  const btn = $("pc-refine");
+  btn.disabled = true; btn.innerHTML = "&#10024; Refining&hellip;";
+  out.innerHTML = `<div class="infobox">Asking ${esc(aiLabel())} to refine the model, then
+    checking it did not drop or change a property${INFO.tla_tools && INFO.tla_tools.available ? " and re-running TLC" : ""}&hellip;</div>`;
+  try{
+    const d = await postJSON("/api/llm/pluscal", {text:$("pc-text").value, id:$("pc-id").value,
+      template:$("template").value, backend:$("backend").value, llm: aiConfig(),
+      validate: !!(INFO.tla_tools && INFO.tla_tools.available)});
+    if(d.error) throw new Error(d.error);
+    PC_CANDIDATE = d;
+    const mods = d.modified_properties || [];
+    out.innerHTML = `
+      <div class="ai-card">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <b style="font-size:13.5px">AI-refined model</b>
+          <span class="verdict ${d.accepted ? "improved" : "regressed"}">${d.accepted ? "passes the guards" : "rejected"}</span>
+          <span style="margin-left:auto;font-size:11.5px;color:var(--muted)">${esc(d.provider)} &middot; candidate</span>
+        </div>
+        ${d.reasons.length ? `<ul style="font-size:12.5px;color:var(--bad);margin:8px 0 0">${d.reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul>` : ""}
+        ${mods.length ? `<div class="ai-sub">Changed definitions</div>${mods.map(m => `<div style="font-size:12.5px;margin-bottom:4px">
+          <code>${esc(m.name)}</code>: <span style="color:var(--muted)">${esc(m.before)}</span> &rarr; <b>${esc(m.after)}</b></div>`).join("")}` : ""}
+        ${d.validation ? validationHTML(d.validation) : ""}
+        ${d.rationale ? `<div style="font-size:12.5px;color:var(--muted);margin-top:8px">${esc(d.rationale)}</div>` : ""}
+        ${d.tla ? `<details style="margin-top:8px"><summary style="cursor:pointer;font-size:12.5px">Show candidate module</summary>
+          <pre class="codebox" style="margin-top:6px">${esc(d.tla)}</pre>
+          <pre class="codebox" style="margin-top:6px;max-height:160px">${esc(d.cfg)}</pre></details>` : ""}
+        ${d.accepted ? `<div class="controls"><button class="primary" onclick="pcAdopt()">Adopt this model</button>
+          <span class="hint">replaces the generated module above</span></div>` : ""}
+      </div>`;
+  }catch(e){
+    out.innerHTML = `<div class="errbox show">${esc(e.message || e)}</div>`;
+  }finally{
+    btn.disabled = $("ai-provider").value === "none"; btn.innerHTML = "&#10024; Refine with AI";
+  }
+}
+function pcAdopt(){
+  if(!PC || !PC_CANDIDATE || !PC_CANDIDATE.accepted) return;
+  PC = {...PC, tla: PC_CANDIDATE.tla, cfg: PC_CANDIDATE.cfg,
+        validation: PC_CANDIDATE.validation};
+  renderPlusCal(PC);
+  $("pc-refine-out").innerHTML = `<div class="okbox">Adopted the AI-refined model.</div>`;
 }
 
 function renderConfigInfo(){
@@ -1904,9 +2297,9 @@ async function parseExport(){
     if(!fileInput.files.length){ showExpError("please choose a file"); return; }
     const file = fileInput.files[0];
     const ext = file.name.split(".").pop().toLowerCase();
-    const isBinary = ["xlsx","xls"].includes(ext);
+    const isBinary = ["xlsx","xls","docx"].includes(ext);
     const fmtMap = {csv:"csv", xlsx:"excel", xls:"excel", json:"json",
-                    reqif:"reqif", xml:"reqif"};
+                    reqif:"reqif", xml:"reqif", docx:"docx"};
     const fmt = fmtMap[ext] || "csv";
     const reader = new FileReader();
     reader.onload = async e => {
@@ -1976,8 +2369,64 @@ function renderExportResults(d){
   // the color legend only makes sense once there's a graph to read
   $("exp-graph-legend").style.display = (d.n_requirements >= 2) ? "flex" : "none";
   renderCompleteness(d.completeness);
+  renderTrace(d.traceability, d.types);
   renderExportGraph(d);
   renderExportTable(d);
+}
+
+// Traceability health of the loaded document (from its own link metadata) plus
+// the requirement-type mix — the two set-level questions an architect asks
+// right after "is it well written?".
+function renderTrace(t, types){
+  const box = $("exp-trace");
+  if(!t || !t.n_requirements){ box.innerHTML = ""; return; }
+  const stat = (v, l, tone, tip) =>
+    `<div style="flex:1;min-width:104px" title="${tip||""}"><div style="font-size:20px;font-weight:700;
+       color:${tone||"var(--text)"}">${v}</div>
+     <div style="font-size:11px;font-weight:600;letter-spacing:.04em;
+       text-transform:uppercase;color:var(--muted)">${l}</div></div>`;
+  const idTone = t.pct_identified >= 100 ? "var(--ok)" : (t.pct_identified >= 60 ? "#B25313" : "var(--bad)");
+  const findings = t.findings.map(f => {
+    const s = SEV_UI[f.severity];
+    return `<li style="margin-bottom:5px"><span style="font-size:10.5px;font-weight:700;
+      text-transform:uppercase;letter-spacing:.04em;padding:2px 8px;border-radius:99px;
+      color:${s.c};background:${s.bg}">${s.t}</span>
+      ${esc(f.label)} <span style="color:var(--muted)">— ${esc(f.hint)}</span></li>`;
+  }).join("");
+  const mix = (obj, label) => {
+    const total = Object.values(obj).reduce((a,b)=>a+b, 0) || 1;
+    return `<div style="margin-bottom:6px"><span style="font-size:11px;font-weight:600;
+      letter-spacing:.04em;text-transform:uppercase;color:var(--muted)">${label}</span><br>` +
+      Object.entries(obj).map(([k,v]) =>
+        `<span style="display:inline-block;font-size:11.5px;padding:2px 9px;margin:3px 4px 0 0;
+          border-radius:99px;background:var(--accent-soft);border:1px solid #d9d6f5;
+          color:var(--accent)">${esc(k)} <b>${v}</b> · ${Math.round(100*v/total)}%</span>`
+      ).join("") + `</div>`;
+  };
+  box.innerHTML = `
+    <div class="card" style="padding:14px 16px;margin:0 0 14px">
+      <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+        <b style="font-size:14px">Traceability &amp; type mix</b>
+        <span style="color:var(--muted);font-size:12px">link health from the document's own
+          parent / satisfies / verified-by metadata — no model needed</span>
+      </div>
+      <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:12px">
+        ${stat(t.pct_identified + "%", "have an identifier", idTone,
+               "a requirement with no id cannot be the target of a trace link")}
+        ${stat(t.link_counts.parent + t.link_counts.satisfy, "upward links",
+               null, "parent / derived-from / satisfies references")}
+        ${stat(t.n_resolved, "resolve in set", t.n_dangling ? "#B25313" : "var(--ok)",
+               "upward links whose target requirement is present in this document")}
+        ${stat(t.n_dangling, "dangling", t.n_dangling ? "var(--bad)" : "var(--muted)",
+               "referenced requirement is missing, renamed, or in another document")}
+        ${stat(t.n_verification_planned, "verification planned", null,
+               "requirements naming a verification method or test case")}
+      </div>
+      ${findings ? `<ul style="margin:0 0 12px;padding-left:2px;list-style:none;font-size:12.5px">${findings}</ul>`
+                 : `<div style="margin-bottom:12px;color:var(--ok);font-size:12.5px">
+                      &#10003; identifiers are unique and every declared link resolves.</div>`}
+      ${types ? mix(types.by_type, "requirement type") + mix(types.by_ears, "EARS pattern") : ""}
+    </div>`;
 }
 
 // Set-level readiness: how much of this baseline can go to design as written,

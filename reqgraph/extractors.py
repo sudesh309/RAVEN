@@ -44,9 +44,11 @@ def _patterns(t: Template) -> dict:
         return re.compile(r"(?<![\w'])(" + t.alt(items) + r")(?![\w'])", _FLAGS) \
             if items else None
 
+    lead_markers = tuple(dict.fromkeys(
+        t.condition_markers + getattr(t, "leading_condition_markers", ())))
     p = {
-        "cond_lead": (re.compile(r"^(\s*)(" + t.alt(t.condition_markers) + r")(?![\w'])",
-                                 _FLAGS) if t.condition_markers else None),
+        "cond_lead": (re.compile(r"^(\s*)(" + t.alt(lead_markers) + r")(?![\w'])",
+                                 _FLAGS) if lead_markers else None),
         "cond": marker(t.condition_markers),
         "modality": marker(t.modality_keywords),
         "constraint": marker(t.constraint_markers),

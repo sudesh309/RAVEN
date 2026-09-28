@@ -28,6 +28,11 @@ class Template:
         "during", "in case of", "unless", "as long as", "provided that",
         "given that", "whenever",
     )
+    # Markers recognised only at the very start of a requirement. EARS's
+    # optional-feature pattern opens with "Where <feature>, the …", but "where"
+    # mid-sentence is ordinary prose ("the bay where the drone is parked"), so it
+    # must not be searched for as a trailing condition.
+    leading_condition_markers: tuple = ("where",)
     modality_keywords: tuple = (
         "shall not", "should not", "must not", "will not", "may not",
         "shall", "should", "must", "will", "may", "cannot", "can",
