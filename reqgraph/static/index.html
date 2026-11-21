@@ -353,6 +353,7 @@
   <a href="#tool-compare2"><b>4</b>Compare SysML v2</a>
   <a href="#tool-compare1"><b>5</b>Compare SysML v1 · RVTM</a>
   <a href="#tool-pluscal"><b>6</b>PlusCal / TLA+</a>
+  <a href="#tool-review"><b>7</b>Agentic review</a>
   <a href="#tool-ai">&#9881; AI assistant</a>
 </nav>
 <main>
@@ -1099,6 +1100,57 @@
     <div id="pc-refine-out"></div>
   </section>
 
+  <!-- ── 7 · Agentic review ─────────────────────────────────────────────── -->
+  <section class="card" id="tool-review">
+    <h2><span class="step">7</span>Agentic review &mdash; requirements &amp; architecture</h2>
+    <p class="lead">A team of review agents checks the set. The <b>quality team</b>
+      (wording, completeness, rationale &amp; verification, consistency) and the
+      <b>cascade agent</b> (decomposition from parent links and levels) need only the
+      requirements. Add a <b>SysML model</b> and the separate <b>architecture team</b>
+      checks allocation, unjustified elements and missing derived requirements.
+      With the AI assistant on, agents add <i>candidate</i> findings for you to confirm.</p>
+    <div class="controls" style="margin-top:0">
+      <div class="ctl"><label for="rv-file">Requirements file</label>
+        <input type="file" id="rv-file" accept=".csv,.xlsx,.xls,.json,.reqif,.xml,.docx,.txt"
+               style="font:inherit;cursor:pointer"></div>
+      <div class="ctl"><label for="rv-arch-file">Architecture model (optional)</label>
+        <input type="file" id="rv-arch-file" accept=".sysml,.txt,.xmi,.uml,.xml,.ttl,.mdzip"
+               style="font:inherit;cursor:pointer"></div>
+      <button class="ghost" id="rv-sample" style="align-self:flex-end">Load drone example</button>
+    </div>
+    <details class="paramhelp" id="rv-paste">
+      <summary>&hellip;or paste requirements / model text</summary>
+      <div class="controls">
+        <div class="ctl"><label for="rv-format">Requirements format</label>
+          <select id="rv-format">
+            <option value="lines">Plain text &mdash; one per line</option>
+            <option value="csv">CSV (with header row)</option>
+            <option value="json">JSON</option>
+            <option value="reqif">ReqIF (XML)</option>
+          </select></div>
+      </div>
+      <textarea id="rv-req" spellcheck="false" style="min-height:110px"
+        placeholder="The flight control unit shall …"></textarea>
+      <textarea id="rv-arch" spellcheck="false" style="min-height:110px;margin-top:8px"
+        placeholder="SysML v2 model (optional): part def DroneSystem { part fcu : FlightControlUnit; } …"></textarea>
+    </details>
+    <div class="controls">
+      <div class="ctl"><label for="rv-agents">Agents</label>
+        <select id="rv-agents">
+          <option value="">All applicable</option>
+          <option value="quality">Quality team only</option>
+          <option value="cascade">Cascade only</option>
+          <option value="architecture">Architecture team only</option>
+        </select></div>
+      <label class="hint" style="align-self:flex-end;display:flex;gap:6px;align-items:center">
+        <input type="checkbox" id="rv-llm"> Use AI assistant (candidate findings)</label>
+      <button class="primary" id="rv-run" style="align-self:flex-end">Run review</button>
+    </div>
+    <div class="hint" id="rv-loaded" style="display:block;margin-top:6px"></div>
+    <div class="errbox" id="rv-error"></div>
+    <div id="rv-out"></div>
+  </section>
+
   <!-- ── AI assistant settings ──────────────────────────────────────────── -->
   <section class="card" id="tool-ai">
     <h2>&#9881; AI assistant <span style="text-transform:none;font-weight:400">(optional)</span></h2>
@@ -1209,6 +1261,7 @@ async function boot(){
   v1LoadExample();
   aiInit();
   pcInit();
+  rvInit();
 }
 
 // ===================================================================
@@ -1385,6 +1438,131 @@ const PC_EXAMPLES = [
   ["REQ-001", "ubiquitous", "The flight management system shall calculate the optimal cruise altitude."],
 ];
 let PC = null;
+// ===================================================================
+// 7 · Agentic review
+// ===================================================================
+let RV = {req:null, arch:null, report:null, sev:"", team:""};
+const RV_FMT = {csv:"csv", xlsx:"excel", xls:"excel", json:"json", reqif:"reqif",
+                xml:"reqif", docx:"docx", txt:"lines"};
+function rvReadFile(file){
+  return new Promise((res, rej) => {
+    const ext = file.name.split(".").pop().toLowerCase();
+    const binary = ["xlsx","xls","docx","mdzip"].includes(ext);
+    const r = new FileReader();
+    r.onload = e => res({content:e.target.result, encoding: binary ? "base64" : "utf-8",
+                         ext, name:file.name});
+    r.onerror = () => rej(r.error);
+    binary ? r.readAsDataURL(file) : r.readAsText(file);
+  });
+}
+function rvLoaded(){
+  const parts = [];
+  if(RV.req) parts.push(`Requirements: <b>${esc(RV.req.name)}</b>`);
+  if(RV.arch) parts.push(`Architecture: <b>${esc(RV.arch.name)}</b>`);
+  $("rv-loaded").innerHTML = parts.join(" &middot; ");
+}
+function rvInit(){
+  $("rv-file").onchange = async e => { const f = e.target.files[0];
+    RV.req = f ? await rvReadFile(f) : null; rvLoaded(); };
+  $("rv-arch-file").onchange = async e => { const f = e.target.files[0];
+    RV.arch = f ? await rvReadFile(f) : null; rvLoaded(); };
+  $("rv-sample").onclick = async () => {
+    const d = await postJSON("/api/review/sample", {});
+    if(d.error){ rvError(d.error); return; }
+    RV.req = {content:d.req_content, encoding:"utf-8", ext:"reqif", name:d.req_name};
+    RV.arch = {content:d.arch_content, encoding:"utf-8", ext:"sysml", name:d.arch_name};
+    $("rv-file").value = ""; $("rv-arch-file").value = "";
+    rvLoaded(); rvRun();
+  };
+  $("rv-run").onclick = rvRun;
+  // typing in a paste box takes over from a previously loaded file
+  $("rv-req").oninput = () => { RV.req = null; $("rv-file").value = ""; rvLoaded(); };
+  $("rv-arch").oninput = () => { RV.arch = null; $("rv-arch-file").value = ""; rvLoaded(); };
+}
+function rvError(msg){ const b = $("rv-error"); b.textContent = msg || ""; b.classList.toggle("show", !!msg); }
+async function rvRun(){
+  rvError(null);
+  const body = {agents: $("rv-agents").value ? [$("rv-agents").value] : null};
+  const pasted = $("rv-req").value.trim(), pastedArch = $("rv-arch").value.trim();
+  if(RV.req){ body.req_content = RV.req.content; body.encoding = RV.req.encoding;
+              body.req_format = RV_FMT[RV.req.ext] || "csv"; }
+  else if(pasted){ body.req_content = pasted; body.req_format = $("rv-format").value; }
+  else { rvError("choose a requirements file, paste requirements, or load the drone example"); return; }
+  if(RV.arch){ body.arch_content = RV.arch.content; body.arch_encoding = RV.arch.encoding;
+               body.arch_name = RV.arch.name; }
+  else if(pastedArch){ body.arch_content = pastedArch; }
+  if($("rv-llm").checked){ body.use_llm = true; body.llm = aiConfig(); }
+  $("rv-run").disabled = true; $("rv-run").textContent = "Reviewing…";
+  try{
+    const d = await postJSON("/api/review", body);
+    if(d.error){ rvError(d.error); return; }
+    RV.report = d; RV.sev = ""; RV.team = ""; rvRender();
+  } finally { $("rv-run").disabled = false; $("rv-run").textContent = "Run review"; }
+}
+const RV_SEV = {blocker:"find-high", major:"find-medium", minor:"find-low", info:"find-low"};
+function rvRender(){
+  const d = RV.report, s = d.summary, f = s.findings;
+  const kpi = (v, l, cls="", sub="") => `<div class="kpi ${cls}"><div class="v">${v}</div><div class="l">${l}</div>${sub ? `<div class="d">${sub}</div>` : ""}</div>`;
+  let h = `<div class="kpis" style="margin-top:14px">
+    ${kpi(esc(s.verdict), "verdict", f.blocker ? "bad" : f.major ? "warn" : "good")}
+    ${kpi(s.pct_ready + "%", "requirements ready", "", `${s.ready} ready · ${s.needs_work} need work · ${s.blocked} blocked`)}
+    ${kpi(f.blocker, "blockers", f.blocker ? "bad" : "good")}
+    ${kpi(f.major, "major", f.major ? "warn" : "good")}
+    ${kpi(f.minor + " / " + f.info, "minor / info")}
+    ${kpi(s.candidates, "candidates", "", "need engineer confirmation")}
+  </div>`;
+  if(d.warnings && d.warnings.length) h += `<div class="infobox">${d.warnings.map(esc).join("<br>")}</div>`;
+  if(d.architecture_summary){ const a = d.architecture_summary;
+    h += `<div class="infobox">Architecture: ${a.elements} elements, ${a.requirements} model requirements, links ${esc(JSON.stringify(a.links))}</div>`; }
+  // agent table
+  h += `<h3 style="margin:16px 0 6px">Agents</h3><div style="overflow:auto"><table><thead><tr>
+    <th>Agent</th><th>Team</th><th>Status</th><th>Blocker</th><th>Major</th><th>Minor</th><th>Key metrics</th></tr></thead><tbody>`;
+  for(const [name, a] of Object.entries(d.agents)){
+    const c = a.counts || {};
+    const m = Object.entries(a.metrics || {}).filter(([k, v]) => v !== null && typeof v !== "object")
+                    .map(([k, v]) => `${esc(k.replace(/_/g, " "))}: <b>${esc(String(v))}</b>`).join(" · ");
+    const st = a.status === "ok" ? `<span class="qg-pass">ok</span>`
+             : `<span class="${a.status === "error" ? "qg-fail" : "hint"}">${esc(a.status)}</span> <span class="hint">${esc(a.reason)}</span>`;
+    h += `<tr><td><b>${esc(name.replace(/_/g, " "))}</b></td><td>${esc(a.domain)}</td><td>${st}</td>
+      <td>${c.blocker || 0}</td><td>${c.major || 0}</td><td>${c.minor || 0}</td><td style="font-size:12.5px">${m}</td></tr>`;
+  }
+  h += `</tbody></table></div>`;
+  // filters + findings
+  const teams = [...new Set(Object.values(d.agents).map(a => a.domain))];
+  h += `<div class="controls" style="margin-top:14px">
+    <div class="ctl"><label for="rv-f-sev">Severity</label><select id="rv-f-sev">
+      <option value="">all</option><option>blocker</option><option>major</option><option>minor</option><option>info</option></select></div>
+    <div class="ctl"><label for="rv-f-team">Team</label><select id="rv-f-team"><option value="">all</option>
+      ${teams.map(t => `<option>${esc(t)}</option>`).join("")}</select></div>
+    <button class="ghost" id="rv-dl-md" style="align-self:flex-end">Download report (.md)</button>
+    <button class="ghost" id="rv-dl-csv" style="align-self:flex-end">Findings (.csv)</button>
+    <button class="ghost" id="rv-dl-json" style="align-self:flex-end">Full JSON</button>
+  </div><div id="rv-findings"></div>`;
+  $("rv-out").innerHTML = h;
+  $("rv-f-sev").value = RV.sev; $("rv-f-team").value = RV.team;
+  $("rv-f-sev").onchange = e => { RV.sev = e.target.value; rvFindings(); };
+  $("rv-f-team").onchange = e => { RV.team = e.target.value; rvFindings(); };
+  $("rv-dl-md").onclick = () => download("raven_review.md", d.markdown);
+  $("rv-dl-csv").onclick = () => download("raven_review_findings.csv", d.csv);
+  $("rv-dl-json").onclick = () => { const x = {...d}; delete x.markdown; delete x.csv;
+                                    download("raven_review.json", JSON.stringify(x, null, 2)); };
+  rvFindings();
+}
+function rvFindings(){
+  const d = RV.report, dom = Object.fromEntries(Object.entries(d.agents).map(([k, a]) => [k, a.domain]));
+  const rows = d.findings.filter(x => (!RV.sev || x.severity === RV.sev) && (!RV.team || dom[x.agent] === RV.team));
+  const shown = rows.slice(0, 400);
+  let h = `<div class="hint" style="display:block;margin:8px 0">${rows.length} finding(s)${rows.length > shown.length ? ` — first ${shown.length} shown; download for all` : ""}</div>
+    <div style="overflow:auto;max-height:560px"><table><thead><tr><th>Severity</th><th>Subject</th><th>Finding</th><th>Agent</th></tr></thead><tbody>`;
+  for(const x of shown){
+    const cand = x.status === "candidate" ? ` <span class="chip" title="${x.source === "llm" ? "proposed by the AI assistant" : "heuristic"} — confirm before acting">candidate${x.source === "llm" ? " · AI" : ""}</span>` : "";
+    h += `<tr><td><span class="find-sev ${RV_SEV[x.severity]}">${esc(x.severity)}</span></td>
+      <td><b>${esc(x.subject_id || "(set)")}</b>${x.subject_kind === "element" ? ` <span class="hint">element</span>` : ""}</td>
+      <td>${esc(x.message)}${cand}${x.hint ? `<div class="hint" style="display:block">&rarr; ${esc(x.hint)}</div>` : ""}</td>
+      <td class="hint">${esc(x.agent.replace(/_/g, " "))}</td></tr>`;
+  }
+  $("rv-findings").innerHTML = h + `</tbody></table></div>`;
+}
 function pcInit(){
   const sel = $("pc-example");
   sel.innerHTML = PC_EXAMPLES.map((e, i) => `<option value="${i}">${esc(e[0])} &mdash; ${esc(e[1])}</option>`).join("");

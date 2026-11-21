@@ -576,6 +576,7 @@ def read_reqif(path):
     text_ref = text_ref or "AD-TEXT"
 
     out = []
+    by_ident = {}                          # SPEC-OBJECT IDENTIFIER -> (rid, meta)
     for so in tree.findall(f".//{_q('SPEC-OBJECT')}"):
         rid, text = None, None
         meta = {}
@@ -607,7 +608,52 @@ def read_reqif(path):
                         meta[name] = the_value
         if text is not None and text != "":
             out.append((rid, text, meta))
+            by_ident[so.get("IDENTIFIER", "")] = (rid, meta)
+    _reqif_trace_links(tree, by_ident)
     return out
+
+
+_LEVEL_NUM_RE = re.compile(r"(\d+)")
+
+
+def _reqif_level(meta: dict):
+    """Numeric level from a 'level' / 'requirement_level' attribute, if any."""
+    for key in ("level", "requirement_level", "req_level", "tier"):
+        m = _LEVEL_NUM_RE.search(str(meta.get(key, "")))
+        if m:
+            return int(m.group(1))
+    return None
+
+
+def _reqif_trace_links(tree, by_ident: dict) -> None:
+    """Turn SPEC-RELATIONs into a ``parent`` attribute on the lower requirement.
+
+    ReqIF relations are directed, but tools disagree on the direction
+    (DOORS link modules often point child -> parent, generators parent ->
+    child). When both ends carry a numeric level the higher-level one is the
+    parent; otherwise SOURCE is taken as the parent. The relation type's name
+    (e.g. "Derives", "Refines") is kept in ``parent_relation``.
+    """
+    rel_types = {rt.get("IDENTIFIER", ""): rt.get("LONG-NAME", "")
+                 for rt in tree.findall(f".//{_q('SPEC-RELATION-TYPE')}")}
+    for rel in tree.findall(f".//{_q('SPEC-RELATION')}"):
+        src = rel.find(f"./{_q('SOURCE')}/{_q('SPEC-OBJECT-REF')}")
+        tgt = rel.find(f"./{_q('TARGET')}/{_q('SPEC-OBJECT-REF')}")
+        if src is None or tgt is None:
+            continue
+        a, b = by_ident.get((src.text or "").strip()), by_ident.get((tgt.text or "").strip())
+        if not a or not b or not a[0] or not b[0]:
+            continue
+        la, lb = _reqif_level(a[1]), _reqif_level(b[1])
+        parent, child = (b, a) if (la is not None and lb is not None and lb < la) else (a, b)
+        existing = [x.strip() for x in str(child[1].get("parent", "")).split(";") if x.strip()]
+        if parent[0] not in existing:
+            existing.append(parent[0])
+        child[1]["parent"] = "; ".join(existing)
+        type_ref = rel.find(f"./{_q('TYPE')}/{_q('SPEC-RELATION-TYPE-REF')}")
+        rtype = rel_types.get((type_ref.text or "").strip() if type_ref is not None else "", "")
+        if rtype:
+            child[1].setdefault("parent_relation", rtype)
 
 
 def _reqif_enum_label(tree, ref: str) -> str:

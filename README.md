@@ -296,6 +296,62 @@ python -m reqgraph rewrite reqs.csv --provider vertex --project my-project --loc
 python -m reqgraph pluscal reqs.csv --out specs/ --refine --provider ollama --validate
 ```
 
+### 3.8 Agentic review — requirements, cascade and architecture
+
+A team of review agents checks a requirement set and, when you give one, its
+SysML architecture. The teams are deliberately separate: the **quality** verdict
+never depends on whether a model is loaded.
+
+| Team | Agent | Checks |
+|---|---|---|
+| Quality | `writing_quality` | INCOSE wording rules: modality, weak words, vague quantifiers, passive voice, atomicity |
+| Quality | `completeness` | each requirement fully stated (no TBD, units, tolerances); set covers functional / performance / interface / safety / off-nominal |
+| Quality | `rationale` | rationale present and genuinely justifying (not a placeholder or a restatement), source or parent recorded, verification method present and adequate |
+| Quality | `consistency` | duplicate ids, near-duplicates, polarity and value conflicts |
+| Cascade | `cascade` | from parent links + levels: dangling links, cycles, orphans, level inversions, undecomposed requirements, children that do not cover their parent, child budgets looser than the parent's |
+| Architecture | `allocation` | every requirement realised by a model element (`satisfy`, `allocate`, `subject`, allocation column, else by name) |
+| Architecture | `architecture_justification` | every part / interface / function justified by a requirement — otherwise gold-plating or a missing requirement |
+| Architecture | `derived_requirements` | requirements in the model but not in the spec; decomposed elements with no derived requirement; child requirements allocated outside the parent's branch; level vs architecture depth |
+
+The cascade agent runs when the set has parent / derived-from links or a level
+column (ReqIF `SPEC-RELATION`s become parent links automatically). The
+architecture team runs only when a model is supplied. With the AI assistant on,
+agents add **candidate** findings (an LLM can never raise a blocker or remove a
+rule-based finding).
+
+**GUI:** card **7 · Agentic review** — upload a requirement file and, optionally,
+a model (`.sysml`, `.xmi`, `.ttl`, `.mdzip`), or press **Load drone example**.
+
+**CLI:**
+
+```bash
+python -m reqgraph review reqs.reqif                                # quality + cascade
+python -m reqgraph review reqs.reqif -a model.sysml -o review.md   # + architecture team
+python -m reqgraph review reqs.csv --agents quality --format json
+python -m reqgraph review reqs.reqif -a model.sysml --llm --provider ollama
+python -m reqgraph review reqs.reqif --fail-on blocker             # exit 1 for CI gates
+```
+
+**Python / LangGraph / MCP:**
+
+```python
+from reqgraph.agents import review
+from reqgraph.architecture import load_architecture
+report = review(items, load_architecture("model.sysml"))   # items: (id, text, meta)
+print(report.to_markdown())
+
+from reqgraph.agents.langgraph_adapter import build_review_graph, initial_state
+graph = build_review_graph()                 # pip install langgraph
+out = graph.invoke(initial_state(items, load_architecture("model.sysml")))
+```
+
+`python -m reqgraph mcp-server` serves the agents as MCP tools (`raven_review`,
+`raven_quality_review`, `raven_cascade_review`, `raven_architecture_review`,
+`raven_parse_architecture`, `raven_list_agents`) for Claude Code / Desktop or
+any MCP host. The design is in
+[`reqgraph/docs/AGENTIC_ARCHITECTURE.md`](reqgraph/docs/AGENTIC_ARCHITECTURE.md);
+the agent skill is [`skills/raven-requirements-review/SKILL.md`](skills/raven-requirements-review/SKILL.md).
+
 ---
 
 ## 4. Configure each component

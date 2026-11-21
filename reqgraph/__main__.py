@@ -816,6 +816,45 @@ def cmd_rewrite(args):
     return 0
 
 
+def cmd_review(args):
+    """Multi-agent requirement review (quality, cascade, architecture)."""
+    from .agents import ReviewOrchestrator, default_agents
+    from .architecture import load_architecture
+    items = _read_items(args.input)
+    arch = load_architecture(args.architecture) if args.architecture else None
+    prov = _provider_from_args(args, required=True, check=True) if args.llm else None
+    try:
+        agents = default_agents(prov, args.agents)
+    except ValueError as exc:
+        sys.exit(f"error: {exc}")
+    report = ReviewOrchestrator(agents, llm=prov,
+                                config={"use_llm": bool(prov),
+                                        "llm_max_calls": args.llm_max_calls}).run(items, arch)
+    if args.format == "json":
+        out = json.dumps(report.to_dict(), indent=2, ensure_ascii=False, default=str)
+    elif args.format == "csv":
+        out = report.to_csv()
+    else:
+        out = report.to_markdown()
+    if args.out:
+        with open(args.out, "w", encoding="utf-8", newline="") as fh:
+            fh.write(out)
+        s = report["summary"]
+        print(f"{s['verdict']}: {s['requirements']} requirements, "
+              f"{s['findings']['blocker']} blocker / {s['findings']['major']} major findings "
+              f"-> {args.out}")
+    else:
+        print(out)
+    return 1 if args.fail_on and report["summary"]["findings"].get(args.fail_on, 0) else 0
+
+
+def cmd_mcp_server(args):
+    from .agents.mcp_server import serve
+    prov = _provider_from_args(args, required=False) if args.provider else None
+    serve(llm=prov)
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="reqgraph",
                                  description="IREB-CPRE requirement <-> graph toolkit")
@@ -1026,6 +1065,30 @@ def main(argv=None):
     pw.add_argument("--template", default="IREB-Rupp")
     _add_llm_args(pw)
     pw.set_defaults(func=cmd_rewrite)
+
+    pr = sub.add_parser("review",
+                        help="multi-agent review: quality, cascade and (with a model) "
+                             "requirement <-> architecture")
+    pr.add_argument("input", help="requirement file (.reqif .csv .xlsx .json .docx .txt)")
+    pr.add_argument("--architecture", "-a",
+                    help="architecture model (.sysml v2, or .xmi/.ttl/.mdzip v1)")
+    pr.add_argument("--agents", help="comma-separated agents or teams "
+                                     "(quality, cascade, architecture); default all")
+    pr.add_argument("--format", choices=["markdown", "json", "csv"], default="markdown")
+    pr.add_argument("--out", "-o", help="write the report to a file")
+    pr.add_argument("--fail-on", choices=["blocker", "major"],
+                    help="exit 1 when findings of this severity exist (for CI gates)")
+    pr.add_argument("--llm", action="store_true",
+                    help="let LLM-capable agents add candidate findings")
+    pr.add_argument("--llm-max-calls", type=int, default=4,
+                    help="LLM calls per agent (default 4)")
+    _add_llm_args(pr)
+    pr.set_defaults(func=cmd_review)
+
+    pm = sub.add_parser("mcp-server",
+                        help="serve the review agents as MCP tools over stdio")
+    _add_llm_args(pm)
+    pm.set_defaults(func=cmd_mcp_server)
 
     args = ap.parse_args(argv)
     level = {0: logging.WARNING, 1: logging.INFO}.get(args.verbose, logging.DEBUG)

@@ -52,6 +52,9 @@ POST /api/pluscal/validate {tla, cfg} -> pcal.trans + TLC verdict
 POST /api/llm/status  {llm?} -> AI back-end health (no billable call)
 POST /api/llm/rewrite {text, llm, template?, backend?} -> rewrite candidate,
                       re-scored by RAVEN's quality + completeness checks
+POST /api/review     {req_content, req_format?, encoding?, arch_content?, agents?,
+                      use_llm?, llm?} -> multi-agent review report
+POST /api/review/sample {} -> the bundled drone ReqIF + SysML v2 example
 POST /api/llm/pluscal {text, id?, llm, validate?} -> AI-refined PlusCal,
                       guarded against dropped/changed properties + re-run TLC
 
@@ -1082,6 +1085,78 @@ def llm_pluscal_request(state: GuiState, payload: dict) -> dict:
     return out
 
 
+_SAMPLE_DIR = Path(__file__).resolve().parent.parent / "samples" / "drone"
+
+
+def review_sample_request(state: GuiState, payload: dict) -> dict:
+    """The bundled drone example: a 4-level ReqIF set and its SysML v2 model."""
+    try:
+        return {"req_content": (_SAMPLE_DIR / "drone_requirements.reqif").read_text("utf-8"),
+                "req_format": "reqif", "req_name": "drone_requirements.reqif",
+                "arch_content": (_SAMPLE_DIR / "drone_model.sysml").read_text("utf-8"),
+                "arch_name": "drone_model.sysml"}
+    except OSError as exc:
+        raise ReqGraphError(f"the drone sample is not installed here: {exc}") from exc
+
+
+def review_request(state: GuiState, payload: dict) -> dict:
+    """Handle one /api/review payload: the multi-agent review.
+
+    Payload: ``req_content`` + ``req_format`` (+ ``encoding`` "base64" for
+    binary files) as for /api/export; optional ``arch_content`` (SysML v2 text,
+    or a v1 XMI/Turtle file; ``arch_encoding`` "base64" + ``arch_name`` for a
+    Cameo .mdzip); ``agents`` (names or teams); ``use_llm`` + ``llm``.
+    """
+    from .agents import ReviewOrchestrator, default_agents
+    from .architecture import load_architecture
+
+    req_content = payload.get("req_content", "")
+    if not str(req_content).strip():
+        raise ReqGraphError("add a requirement set (paste it or upload a file)")
+    warnings: list = []
+    fmt = (payload.get("req_format") or "").lower().strip()
+    items = _read_items_from_content(req_content, fmt, payload.get("encoding", "utf-8"),
+                                     warnings)
+    if not items:
+        raise ReqGraphError("no requirements found — check the content and format selector")
+
+    arch = None
+    arch_content = payload.get("arch_content") or ""
+    if str(arch_content).strip():
+        try:
+            if payload.get("arch_encoding") == "base64":
+                raw = arch_content.split(",", 1)[1] if "," in arch_content else arch_content
+                data = base64.b64decode(raw)
+                suffix = os.path.splitext(payload.get("arch_name") or "model.mdzip")[1] or ".mdzip"
+                with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                    tmp.write(data)
+                try:
+                    arch = load_architecture(tmp.name)
+                finally:
+                    os.unlink(tmp.name)
+            else:
+                arch = load_architecture(str(arch_content), source_path=payload.get("arch_name", ""))
+        except ReqGraphError:
+            raise
+        except Exception as exc:
+            raise ReqGraphError(f"could not read the architecture model: {exc}") from exc
+
+    prov = _require_provider(state, payload) if payload.get("use_llm") else None
+    try:
+        agents = default_agents(prov, payload.get("agents") or None)
+    except ValueError as exc:
+        raise ReqGraphError(str(exc)) from exc
+    report = ReviewOrchestrator(agents, llm=prov,
+                                config={"use_llm": bool(prov), "llm_max_calls": 3}).run(items, arch)
+    out = report.to_dict()
+    out["markdown"] = report.to_markdown()
+    out["csv"] = report.to_csv()
+    out["warnings"] = warnings
+    if arch is not None:
+        out["architecture_summary"] = arch.summary()
+    return out
+
+
 class _Handler(BaseHTTPRequestHandler):
     state: GuiState = None  # injected by launch()
 
@@ -1152,7 +1227,8 @@ class _Handler(BaseHTTPRequestHandler):
     _POST_ROUTES = ("/api/parse", "/api/connections", "/api/export",
                     "/api/compare", "/api/compare-v1", "/api/pluscal",
                     "/api/pluscal/validate", "/api/llm/status",
-                    "/api/llm/rewrite", "/api/llm/pluscal")
+                    "/api/llm/rewrite", "/api/llm/pluscal", "/api/review",
+                    "/api/review/sample")
 
     def do_POST(self):
         if self.path not in self._POST_ROUTES:
@@ -1165,7 +1241,11 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             length = int(self.headers.get("Content-Length", 0))
             payload = json.loads(self.rfile.read(length) or b"{}")
-            if self.path == "/api/pluscal":
+            if self.path == "/api/review":
+                self._send_json(review_request(self.state, payload))
+            elif self.path == "/api/review/sample":
+                self._send_json(review_sample_request(self.state, payload))
+            elif self.path == "/api/pluscal":
                 self._send_json(pluscal_request(self.state, payload))
             elif self.path == "/api/pluscal/validate":
                 self._send_json(pluscal_validate_request(self.state, payload))
